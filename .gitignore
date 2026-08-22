@@ -1,0 +1,15 @@
+agent/.venv/
+agent/.env
+agent/__pycache__/
+agent/**/__pycache__/
+gateway/node_modules/
+gateway/dist/
+gateway/.env
+
+GOOGLE_TECH_STACK_SETUP.md
+.nim/*
+nim.json
+docs/*
+
+portal/.next/*
+portal/node_modules/*

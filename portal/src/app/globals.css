@@ -1,0 +1,118 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: #131314;
+  color: #e5e2e3;
+  min-height: 100vh;
+}
+
+body {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Encryption glow — applied to interactive surfaces to suggest
+   "this is cryptographically secured". X-Blue radial gradient + soft
+   box-shadow on hover. */
+.encryption-glow {
+  position: relative;
+  transition: box-shadow 200ms ease, border-color 200ms ease, transform 200ms ease;
+}
+
+.encryption-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 0%, rgba(0, 240, 255, 0.15), transparent 65%);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+
+.encryption-glow:hover {
+  border-color: rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.25), 0 12px 32px rgba(0, 240, 255, 0.12);
+}
+
+.encryption-glow:hover::before {
+  opacity: 1;
+}
+
+/* Hide scrollbar utility — used in horizontal tab strips. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Glass-panel — translucent layered surface */
+.glass-panel {
+  background: rgba(22, 22, 24, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Matrix-chip — Matrix-Green status pill (Active, Encrypted, System Online) */
+.matrix-chip {
+  background: rgba(0, 230, 57, 0.08);
+  color: #13ff43;
+  border: 1px solid rgba(19, 255, 67, 0.2);
+}
+
+/* Agent-accent chip for portal special tags */
+.agent-chip {
+  background: rgba(124, 92, 255, 0.1);
+  color: #d1bcff;
+  border: 1px solid rgba(124, 92, 255, 0.25);
+}
+
+/* X-blue-glow — focus ring */
+.x-blue-glow {
+  box-shadow: inset 0 0 0 1px #00dbe9;
+}
+
+/* Agent-card-border — holographic gradient ring revealed on hover */
+.agent-card-border {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+}
+.agent-card-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(45deg, rgba(0, 240, 255, 0.3), rgba(19, 255, 67, 0.3));
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.agent-card-border:hover::before {
+  opacity: 1;
+}
+
+/* Pulse animation for Dream REM state */
+@keyframes rem-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(19, 255, 67, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(19, 255, 67, 0);
+  }
+}
+
+.animate-rem-pulse {
+  animation: rem-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
