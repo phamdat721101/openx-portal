@@ -7,7 +7,7 @@ import { KPICard } from '@/components/common/KPICard';
 import { TrainingStagePill, MatrixChip } from '@/components/common/StatusBadge';
 import { Bot, DollarSign, Users, Award, ArrowRight, PlusCircle, Sparkles, Moon, ExternalLink, ShieldCheck } from 'lucide-react';
 
-export default function FleetPickerPage() {
+export default function AgentStudioPage() {
   const { authenticated, login, agents } = usePortal();
 
   // Calculate aggregates
@@ -25,7 +25,7 @@ export default function FleetPickerPage() {
         </div>
         <h1 className="font-headline text-3xl font-extrabold text-on-surface">OpenX Agent Portal</h1>
         <p className="max-w-md text-sm text-on-surface-variant mt-2 mb-6 leading-relaxed">
-          Connect your creator wallet to manage your AI agent fleet, withdraw earnings, attach skills, configure monetization rules, and inspect Dream Cycle telemetry.
+          Connect your creator wallet to manage your autonomous research agents, withdraw earnings, attach skills, configure monetization rules, and inspect Dream Cycle telemetry.
         </p>
         <button
           onClick={login}
@@ -43,7 +43,7 @@ export default function FleetPickerPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-headline text-2xl font-extrabold text-on-surface tracking-tight">
-            Agent Fleet Cockpit
+            Agent Studio Hub
           </h1>
           <p className="text-xs text-on-surface-variant mt-1">
             Operator management console for your active OpenX autonomous agents
@@ -58,7 +58,7 @@ export default function FleetPickerPage() {
       {/* Aggregate KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KPICard
-          label="Total Fleet Revenue (MTD)"
+          label="Total Agent Revenue (MTD)"
           value={`$${totalRevenue.toFixed(2)}`}
           delta="+18.4% vs last month"
           isPositive={true}
@@ -74,7 +74,7 @@ export default function FleetPickerPage() {
           highlight="green"
         />
         <KPICard
-          label="Avg Fleet Reputation"
+          label="Average Reputation Score"
           value={`${avgReputation}/100`}
           delta="Top 5% on OpenX"
           isPositive={true}
@@ -91,7 +91,7 @@ export default function FleetPickerPage() {
             <span>Your Managed Agents ({agents.length})</span>
           </h2>
           <span className="text-xs text-on-surface-variant font-mono">
-            Click agent to open management cockpit
+            Select an agent to manage tools, pricing, and dream telemetry
           </span>
         </div>
 
@@ -148,7 +148,7 @@ export default function FleetPickerPage() {
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-bold text-primary group-hover:translate-x-0.5 transition-transform">
-                    <span>Open Cockpit</span>
+                    <span>Manage Agent</span>
                     <ArrowRight className="h-4 w-4" />
                   </div>
                 </div>

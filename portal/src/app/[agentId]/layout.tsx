@@ -35,7 +35,7 @@ export default function AgentLayout({ params, children }: AgentLayoutProps) {
           href="/"
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-on-primary"
         >
-          <ArrowLeft className="h-4 w-4" /> Back to Fleet Cockpit
+          <ArrowLeft className="h-4 w-4" /> Back to Agent Studio
         </Link>
       </div>
     );
@@ -50,7 +50,7 @@ export default function AgentLayout({ params, children }: AgentLayoutProps) {
             href="/"
             className="inline-flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-primary transition mb-2"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Fleet Picker
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Agent Studio
           </Link>
 
           <div className="flex flex-wrap items-center gap-3">

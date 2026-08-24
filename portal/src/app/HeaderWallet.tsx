@@ -2,14 +2,28 @@
 
 import React from 'react';
 import { usePortal } from '@/lib/portalContext';
-import { ShieldCheck, LogIn, LogOut, Wallet } from 'lucide-react';
+import { ShieldCheck, LogIn, LogOut, Wallet, Sun, Moon } from 'lucide-react';
 import Link from 'next/link';
 
 export function HeaderWallet() {
-  const { authenticated, activeWallet, login, logout } = usePortal();
+  const { authenticated, activeWallet, login, logout, theme, toggleTheme } = usePortal();
 
   return (
     <div className="flex items-center gap-3">
+      {/* Dark / Light Mode Switcher */}
+      <button
+        onClick={toggleTheme}
+        className="rounded-xl border border-outline-variant/30 bg-surface-container-high/60 p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition shadow-sm"
+        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+        aria-label="Toggle Dark/Light Theme"
+      >
+        {theme === 'dark' ? (
+          <Sun className="h-4 w-4 text-primary transition-transform hover:rotate-45" />
+        ) : (
+          <Moon className="h-4 w-4 text-agent-accent transition-transform hover:-rotate-12" />
+        )}
+      </button>
+
       {authenticated ? (
         <div className="flex items-center gap-2">
           {/* Marketplace Cross-Link */}
@@ -17,7 +31,7 @@ export function HeaderWallet() {
             href="/"
             className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-outline-variant/30 px-3 py-1.5 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition"
           >
-            Fleet Cockpit
+            Agent Studio
           </Link>
 
           {/* Connected Wallet Pill */}

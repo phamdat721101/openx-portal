@@ -5,14 +5,77 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f1f5f9;
+  --surface-container: #e2e8f0;
+  --surface-container-high: #cbd5e1;
+  --surface-container-highest: #94a3b8;
+  
+  --primary: #0090a8;
+  --primary-container: #0090a8;
+  --on-primary: #ffffff;
+  --primary-text: #005a69;
+  
+  --secondary: #059669;
+  --secondary-container: #10b981;
+  --on-secondary: #ffffff;
+  
+  --tertiary: #7c3aed;
+  --error: #e11d48;
+  
+  --on-surface: #0f172a;
+  --on-surface-variant: #475569;
+  --outline: #94a3b8;
+  --outline-variant: #cbd5e1;
+  
+  --agent-accent: #6d28d9;
+  --on-agent-accent: #ffffff;
+  --agent-accent-dim: #5b21b6;
+  --agent-accent-glow: rgba(109, 40, 217, 0.12);
+}
+
+.dark {
   color-scheme: dark;
+  --background: #131314;
+  --surface: #201f20;
+  --surface-container-lowest: #0e0e0f;
+  --surface-container-low: #1c1b1c;
+  --surface-container: #201f20;
+  --surface-container-high: #2a2a2b;
+  --surface-container-highest: #353436;
+  
+  --primary: #00f0ff;
+  --primary-container: #00f0ff;
+  --on-primary: #00363a;
+  --primary-text: #dbfcff;
+  
+  --secondary: #13ff43;
+  --secondary-container: #13ff43;
+  --on-secondary: #003907;
+  
+  --tertiary: #d1bcff;
+  --error: #ffb4ab;
+  
+  --on-surface: #e5e2e3;
+  --on-surface-variant: #b9cacb;
+  --outline: #849495;
+  --outline-variant: #3b494b;
+  
+  --agent-accent: #7c5cff;
+  --on-agent-accent: #f4f0ff;
+  --agent-accent-dim: #6344e6;
+  --agent-accent-glow: rgba(124, 92, 255, 0.15);
 }
 
 html,
 body {
-  background-color: #131314;
-  color: #e5e2e3;
+  background-color: var(--background);
+  color: var(--on-surface);
   min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 body {
@@ -21,9 +84,7 @@ body {
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
-/* Encryption glow — applied to interactive surfaces to suggest
-   "this is cryptographically secured". X-Blue radial gradient + soft
-   box-shadow on hover. */
+/* Encryption glow — applied to interactive surfaces */
 .encryption-glow {
   position: relative;
   transition: box-shadow 200ms ease, border-color 200ms ease, transform 200ms ease;
@@ -41,15 +102,15 @@ body {
 }
 
 .encryption-glow:hover {
-  border-color: rgba(0, 240, 255, 0.4);
-  box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.25), 0 12px 32px rgba(0, 240, 255, 0.12);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary), 0 12px 32px rgba(0, 240, 255, 0.12);
 }
 
 .encryption-glow:hover::before {
   opacity: 1;
 }
 
-/* Hide scrollbar utility — used in horizontal tab strips. */
+/* Hide scrollbar utility */
 .scrollbar-none {
   scrollbar-width: none;
 }
@@ -59,34 +120,34 @@ body {
 
 /* Glass-panel — translucent layered surface */
 .glass-panel {
-  background: rgba(22, 22, 24, 0.7);
+  background: var(--surface);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--outline-variant);
 }
 
-/* Matrix-chip — Matrix-Green status pill (Active, Encrypted, System Online) */
+/* Matrix-chip — Status pill */
 .matrix-chip {
-  background: rgba(0, 230, 57, 0.08);
-  color: #13ff43;
-  border: 1px solid rgba(19, 255, 67, 0.2);
+  background: rgba(19, 255, 67, 0.08);
+  color: var(--secondary);
+  border: 1px solid rgba(19, 255, 67, 0.25);
 }
 
-/* Agent-accent chip for portal special tags */
+/* Agent-accent chip */
 .agent-chip {
-  background: rgba(124, 92, 255, 0.1);
-  color: #d1bcff;
-  border: 1px solid rgba(124, 92, 255, 0.25);
+  background: var(--agent-accent-glow);
+  color: var(--agent-accent);
+  border: 1px solid var(--agent-accent);
 }
 
 /* X-blue-glow — focus ring */
 .x-blue-glow {
-  box-shadow: inset 0 0 0 1px #00dbe9;
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
-/* Agent-card-border — holographic gradient ring revealed on hover */
+/* Agent-card-border */
 .agent-card-border {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--outline-variant);
   position: relative;
 }
 .agent-card-border::before {

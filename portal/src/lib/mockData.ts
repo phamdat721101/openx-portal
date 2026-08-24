@@ -85,7 +85,7 @@ export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
         caller_address: '0x71C...B991',
         amount_usdc: 0.15,
         status: 'settled',
-        network: 'Arbitrum One',
+        network: 'XRPL Testnet (RLUSD)',
         description: 'Multi-hop liquidity report execution (credit deduction)',
       },
       {
@@ -107,7 +107,7 @@ export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
         caller_address: '0x889...CC22',
         amount_usdc: 0.70,
         status: 'settled',
-        network: 'Status Network L2',
+        network: 'OpenX Sub-Agent Rail',
         description: 'Sub-agent task delegation from Portfolio Manager Agent',
       },
       {
@@ -118,7 +118,7 @@ export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
         caller_address: '0x5F2...E891',
         amount_usdc: 0.15,
         status: 'settled',
-        network: 'Arbitrum One',
+        network: 'XRPL Testnet (RLUSD)',
         description: 'Yield farm impermanent loss risk computation',
       },
       {
@@ -153,7 +153,7 @@ export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
         caller_address: '0x992...33FF',
         amount_usdc: 0.20,
         status: 'settled',
-        network: 'Arbitrum One',
+        network: 'XRPL Testnet (RLUSD)',
         description: 'Cross-DEX atomic swap route audit',
       },
     ],
@@ -177,7 +177,7 @@ export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
         caller_address: '0x123...4567',
         amount_usdc: 3.20,
         status: 'settled',
-        network: 'Arbitrum One',
+        network: 'XRPL Testnet (RLUSD)',
         description: 'Smart contract vulnerability scan',
       },
     ],
@@ -276,6 +276,14 @@ export const MOCK_SKILLS_DATA: Record<string, SkillItem[]> = {
   ],
 };
 
+export const DEFAULT_CREDIT_MODEL: CreditModelConfig = {
+  price_usdc: 0.05,
+  free_trial_calls: 0,
+  per_buyer_daily_limit: 0,
+  revenue_share_percentage: 85,
+  updated_at: new Date(0).toISOString(),
+};
+
 export const MOCK_CREDIT_MODEL_DATA: Record<string, CreditModelConfig> = {
   'f8b2d1c9-724e-4f16-9562-581335b2df01': {
     price_usdc: 0.05,
@@ -311,10 +319,10 @@ export const MOCK_DREAM_CYCLE_DATA: Record<string, DreamCycleState> = {
     wake_context: {
       active_memory_buffer_mb: 24.6,
       long_term_embeddings: 8400,
-      last_morning_brief_summary: 'Consolidated 128 market execution episodes. Identified 3 recurring high-slippage patterns in Arbitrum-XRPL bridge routing; synthesized new candidate skill for automated gas fee thresholding.',
+      last_morning_brief_summary: 'Consolidated 128 market execution episodes. Identified 3 recurring high-slippage patterns in XRPL DEX liquidity pool routing; synthesized new candidate skill for automated fee optimization.',
     },
     learning_queue: [
-      { id: 'q1', topic: 'Cross-chain atomic transaction slippage bounds', priority: 'high', progress_pct: 82 },
+      { id: 'q1', topic: 'XRPL atomic transaction slippage bounds', priority: 'high', progress_pct: 82 },
       { id: 'q2', topic: 'FHE Encrypted order book latency optimization', priority: 'medium', progress_pct: 45 },
       { id: 'q3', topic: 'Zero-knowledge proof verification speedups', priority: 'low', progress_pct: 20 },
     ],
@@ -325,9 +333,9 @@ export const MOCK_DREAM_CYCLE_DATA: Record<string, DreamCycleState> = {
     ],
     skillify_candidates: [
       {
-        skill_id: 'hm_skill_bridge_guard',
-        name: 'arbitrum-xrpl-bridge-guard',
-        description: 'Auto-detects bridge congestion anomalies and calculates optimal batching windows to save 30% execution gas.',
+        skill_id: 'hm_skill_xrpl_guard',
+        name: 'xrpl-dex-route-guard',
+        description: 'Auto-detects DEX pool congestion anomalies and calculates optimal batching windows to minimize execution slippage.',
         confidence_score: 97.4,
         artifact_hash: '0x8f2a991c4be8...10f1',
         candidate_status: 'pending_human_review',

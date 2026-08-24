@@ -11,7 +11,7 @@ export default function CreditModelPage({ params }: { params: { agentId: string 
 
   return (
     <div className="space-y-6">
-      {/* 1. Operating Rules Card (Crossmint-inspired) */}
+      {/* 1. Operating Rules Card (OpenX Pricing Engine) */}
       <OperatingRulesCard agentId={params.agentId} config={config} />
 
       {/* 2. Interactive Revenue Projection Simulator */}

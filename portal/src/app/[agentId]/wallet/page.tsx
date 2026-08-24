@@ -43,7 +43,7 @@ export default function WalletPage({ params }: { params: { agentId: string } }) 
         onOpenWithdraw={() => setWithdrawModalOpen(true)}
       />
 
-      {/* 2. SetupChecklist (Toku-inspired threshold progress) */}
+      {/* 2. SetupChecklist (Eligibility and security verification) */}
       {!hasMetThreshold && (
         <SetupChecklist
           title="Withdrawal Eligibility Progress"

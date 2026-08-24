@@ -57,7 +57,7 @@ export function WithdrawModal({ isOpen, onClose, agentId, maxAmount }: WithdrawM
           </div>
           <div>
             <h2 className="font-headline text-lg font-bold text-on-surface">Withdraw Agent Revenue</h2>
-            <p className="text-xs text-on-surface-variant">Instant settlement to owner wallet via Arbitrum One</p>
+            <p className="text-xs text-on-surface-variant">Instant settlement to owner wallet via XRPL (RLUSD)</p>
           </div>
         </div>
 
@@ -115,7 +115,7 @@ export function WithdrawModal({ isOpen, onClose, agentId, maxAmount }: WithdrawM
 
               <div className="flex items-center justify-between mt-2 text-[11px] text-on-surface-variant">
                 <span>Minimum withdrawal: $5.00 USDC</span>
-                <span>Network fee: $0.00 (Gasless)</span>
+                <span>Network fee: $0.00 (Testnet / Zero Fee)</span>
               </div>
             </div>
 

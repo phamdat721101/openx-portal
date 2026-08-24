@@ -17,6 +17,11 @@ export interface StudioAgent {
     federation_broadcasts_pending: number;
   };
   created_at: string;
+  connection_state?: 'registered' | 'online' | 'offline' | 'auto_discovered' | 'revoked';
+  registration_source?: 'explicit' | 'auto_discovered';
+  last_seen_at?: string | null;
+  owner_verified?: boolean;
+  is_demo?: boolean;
 }
 
 export interface StudioAgentList {

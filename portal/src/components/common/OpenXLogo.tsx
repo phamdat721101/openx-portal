@@ -22,7 +22,7 @@ export function OpenXLogo({ size = 26, className = '', showText = true, subText 
           {/* Top Diamond Stack Layer */}
           <path
             d="M12 2L2 7L12 12L22 7L12 2Z"
-            stroke="#00f0ff"
+            stroke="var(--primary)"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -30,7 +30,7 @@ export function OpenXLogo({ size = 26, className = '', showText = true, subText 
           {/* Bottom Diamond Stack Layer */}
           <path
             d="M2 17L12 22L22 17"
-            stroke="#00f0ff"
+            stroke="var(--primary)"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -38,7 +38,7 @@ export function OpenXLogo({ size = 26, className = '', showText = true, subText 
           {/* Middle Diamond Stack Layer */}
           <path
             d="M2 12L12 17L22 12"
-            stroke="#00f0ff"
+            stroke="var(--primary)"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -49,21 +49,21 @@ export function OpenXLogo({ size = 26, className = '', showText = true, subText 
             y="9"
             width="6"
             height="6"
-            fill="#00f0ff"
+            fill="var(--primary)"
             fillOpacity="0.15"
-            stroke="#00f0ff"
+            stroke="var(--primary)"
             strokeWidth="1"
           />
           <path
             d="M12 9V15M9 12H15"
-            stroke="#00f0ff"
+            stroke="var(--primary)"
             strokeWidth="1"
             strokeLinecap="round"
           />
         </svg>
         {/* Ambient Cyan Glow */}
         <div
-          className="absolute inset-0 -z-10 rounded-full blur-md opacity-35 bg-[#00f0ff]"
+          className="absolute inset-0 -z-10 rounded-full blur-md opacity-35 bg-primary"
           style={{ transform: 'scale(0.8)' }}
         />
       </div>
@@ -71,10 +71,10 @@ export function OpenXLogo({ size = 26, className = '', showText = true, subText 
       {showText && (
         <div className="flex flex-col min-w-0">
           <div className="flex items-center gap-1.5 leading-none">
-            <span className="font-headline text-lg font-bold tracking-tight text-[#dbfcff]">
-              Open<span className="text-[#00f0ff]">X</span>
+            <span className="font-headline text-lg font-bold tracking-tight text-on-surface">
+              Open<span className="text-primary">X</span>
             </span>
-            <span className="rounded bg-agent-accent/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#d1bcff] border border-agent-accent/30 tracking-wider uppercase">
+            <span className="rounded bg-agent-accent/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-agent-accent border border-agent-accent/30 tracking-wider uppercase">
               Agent Portal
             </span>
           </div>
