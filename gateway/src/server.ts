@@ -33,6 +33,7 @@ dotenv.config();
 
 export const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 7411;
+const HOST = process.env.OPENX_GATEWAY_HOST || '0.0.0.0';
 
 app.use(cors());
 app.use(express.json());
@@ -838,7 +839,7 @@ app.get('/v1/supplier/defi', (req: Request, res: Response) => {
 });
 
 if (shouldRunGateway && process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
-    console.log(`[openx-gateway] Core backend sidecar listening on http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[openx-gateway] Core backend sidecar listening on http://${HOST}:${PORT}`);
   });
 }
