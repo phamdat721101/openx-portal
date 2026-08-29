@@ -9,7 +9,7 @@ import { Bot, ArrowRight, Moon, Radio, AlertCircle, Plus, X, Copy, Activity } fr
 
 export default function AgentStudioPage() {
   const { agents, agentActivity, usageSummaries, registerAgent, gatewayOnline } = usePortal();
-  const { enabled: authEnabled, ready: authReady, authenticated, login, walletAddress } = usePortalAuth();
+  const { authenticated, walletAddress } = usePortalAuth();
   const [showConnect, setShowConnect] = useState(false);
   const [displayName, setDisplayName] = useState('OpenX Research Agent');
   const [hostType, setHostType] = useState<'kiro-cli' | 'claude-code' | 'adk-python' | 'custom'>('adk-python');
@@ -21,32 +21,12 @@ export default function AgentStudioPage() {
   const online = fleet.filter((item) => item.state === 'online').length;
 
   const connectAgent = async () => {
-    if (!authEnabled || !authenticated || !walletAddress) return;
+    if (!displayName.trim()) return;
     setRegistering(true);
-    const result = await registerAgent({ display_name: displayName, host_type: hostType, model, capabilities: ['telemetry', 'usage-events', 'task-lifecycle'], owner_address: walletAddress || undefined, wallet_address: walletAddress || undefined });
+    const result = await registerAgent({ display_name: displayName, host_type: hostType, model, capabilities: ['telemetry', 'usage-events', 'task-lifecycle'], ...(authenticated && walletAddress ? { owner_address: walletAddress, wallet_address: walletAddress } : {}) });
     setRegistering(false);
     if (result.ok && result.agentId) setRegistration({ agentId: result.agentId, agentKey: result.agentKey });
   };
-
-  if (authEnabled && (!authReady || !authenticated)) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-agent-accent/15 text-agent-accent border border-agent-accent/30 shadow-[0_0_30px_rgba(124,92,255,0.25)]">
-          <Bot className="h-8 w-8" />
-        </div>
-        <h1 className="font-headline text-3xl font-extrabold text-on-surface">OpenX Agent Portal</h1>
-        <p className="max-w-md text-sm text-on-surface-variant mt-2 mb-6 leading-relaxed">
-          Connect your creator wallet to manage autonomous research agents, attach skills, configure operating rules, and inspect Dream Cycle telemetry.
-        </p>
-        <button disabled={!authReady}
-          onClick={login}
-          className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 font-headline text-sm font-bold text-on-primary shadow-[0_0_20px_rgba(0,240,255,0.3)] hover:bg-[#33f3ff] transition"
-        >
-          {authEnabled ? 'Sign In with Wallet' : 'Wallet Login Unavailable'}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
@@ -143,7 +123,7 @@ export default function AgentStudioPage() {
           })}
         </div>
       </div>
-      {showConnect && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-2xl border border-outline-variant/30 bg-surface-container-low p-6 shadow-2xl"><div className="flex items-start justify-between"><div><h2 className="font-headline text-lg font-bold text-on-surface">Connect Agent</h2><p className="mt-1 text-xs text-on-surface-variant">Issue a one-time agent key from Studio Hub.</p></div><button onClick={() => setShowConnect(false)}><X className="h-5 w-5 text-on-surface-variant" /></button></div>{registration ? <div className="mt-5 space-y-3"><p className="text-xs text-secondary">Agent registered. Save this key now; it is shown once.</p><code className="block break-all rounded-xl bg-surface-container-high p-3 text-xs text-on-surface">OPENX_AGENT_ID={registration.agentId}{'\n'}OPENX_AGENT_KEY={registration.agentKey || 'not returned'}</code><button onClick={() => registration.agentKey && navigator.clipboard.writeText(registration.agentKey)} className="inline-flex items-center gap-1 text-xs font-bold text-primary"><Copy className="h-3.5 w-3.5" />Copy key</button><p className="text-[11px] text-on-surface-variant">Schedule <code>python3 agent/sync_agent.py</code> every five minutes and run the agent worker for live task heartbeats.</p></div> : <div className="mt-5 space-y-3"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="w-full rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface" placeholder="Agent name" /><div className="grid grid-cols-2 gap-3"><select value={hostType} onChange={(event) => setHostType(event.target.value as typeof hostType)} className="rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface"><option value="adk-python">ADK Python</option><option value="claude-code">Claude Code</option><option value="kiro-cli">Kiro CLI</option><option value="custom">Custom</option></select><input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface" placeholder="Model" /></div><button disabled={!gatewayOnline || registering || !displayName.trim()} onClick={connectAgent} className="w-full rounded-xl bg-primary px-4 py-3 text-xs font-bold text-on-primary disabled:opacity-50">{registering ? 'Registering…' : 'Register and issue key'}</button></div>}</div></div>}
+      {showConnect && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-2xl border border-outline-variant/30 bg-surface-container-low p-6 shadow-2xl"><div className="flex items-start justify-between"><div><h2 className="font-headline text-lg font-bold text-on-surface">Connect Agent</h2><p className="mt-1 text-xs text-on-surface-variant">Public self-service registration issues a one-time agent key.</p></div><button onClick={() => setShowConnect(false)}><X className="h-5 w-5 text-on-surface-variant" /></button></div>{registration ? <div className="mt-5 space-y-3"><p className="text-xs text-secondary">Agent registered. Save this key now; it is shown once.</p><code className="block break-all rounded-xl bg-surface-container-high p-3 text-xs text-on-surface">OPENX_AGENT_ID={registration.agentId}{'\n'}OPENX_AGENT_KEY={registration.agentKey || 'not returned'}</code><button onClick={() => registration.agentKey && navigator.clipboard.writeText(registration.agentKey)} className="inline-flex items-center gap-1 text-xs font-bold text-primary"><Copy className="h-3.5 w-3.5" />Copy key</button><p className="text-[11px] text-on-surface-variant">Schedule <code>python3 agent/sync_agent.py</code> every five minutes and run the agent worker for live task heartbeats.</p></div> : <div className="mt-5 space-y-3"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="w-full rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface" placeholder="Agent name" /><div className="grid grid-cols-2 gap-3"><select value={hostType} onChange={(event) => setHostType(event.target.value as typeof hostType)} className="rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface"><option value="adk-python">ADK Python</option><option value="claude-code">Claude Code</option><option value="kiro-cli">Kiro CLI</option><option value="custom">Custom</option></select><input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-xl border border-outline-variant/40 bg-surface-container-high p-3 text-sm text-on-surface" placeholder="Model" /></div><button disabled={!gatewayOnline || registering || !displayName.trim()} onClick={connectAgent} className="w-full rounded-xl bg-primary px-4 py-3 text-xs font-bold text-on-primary disabled:opacity-50">{registering ? 'Registering…' : 'Register and issue key'}</button></div>}</div></div>}
     </div>
   );
 }

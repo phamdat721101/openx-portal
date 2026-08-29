@@ -281,18 +281,6 @@ app.post('/v1/agent/register', (req: Request, res: Response): void => {
     res.status(400).json({ ok: false, error: 'invalid_payload', message: parsed.error.errors.map((error) => `${error.path.join('.')}: ${error.message}`).join(', ') });
     return;
   }
-  if (process.env.OPENX_AGENT_REGISTRATION_MODE === 'production') {
-    const configuredToken = process.env.OPENX_CONNECT_TOKEN;
-    const authorization = req.headers.authorization;
-    if (!configuredToken) {
-      res.status(503).json({ ok: false, error: 'registration_unavailable', message: 'Production connect-token verification is not configured' });
-      return;
-    }
-    if (authorization !== `Bearer ${configuredToken}`) {
-      res.status(401).json({ ok: false, error: 'invalid_connect_token', message: 'A valid connect token is required' });
-      return;
-    }
-  }
   try {
     const credential = req.headers['x-agent-key'];
     const result = agentRegistry.register(parsed.data, typeof credential === 'string' ? credential : undefined);
@@ -301,7 +289,7 @@ app.post('/v1/agent/register', (req: Request, res: Response): void => {
       status: 'registered',
       agent: result.agent,
       ...(result.credential ? { credential: { agent_key: result.credential, shown_once: true } } : {}),
-      telemetry_endpoint: `http://localhost:${PORT}/v1/agent/telemetry`,
+      telemetry_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/telemetry`,
     });
   } catch (error) {
     if (error instanceof AgentRegistryError) {

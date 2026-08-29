@@ -30,3 +30,26 @@ test('renders public detailed telemetry without a wallet session', async ({ page
   await expect(page.getByText('nim-cache')).toBeVisible();
   console.log('seam:portal-telemetry-public-state');
 });
+
+test('allows an unauthenticated visitor to register and receive a one-time agent key', async ({ page }) => {
+  await page.route('**/v1/agent/register', async (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true,
+      status: 'registered',
+      agent: {
+        agent_id: 'f8b2d1c9-724e-4f16-9562-581335b2df01', slug: 'public-agent', display_name: 'Public Agent', description: null,
+        model: 'qwen2.5-omni', capabilities: [], host_type: 'custom', owner_address: null, wallet_address: null,
+        owner_verified: false, registration_source: 'explicit', state: 'registered', registered_at: '2026-08-29T00:00:00.000Z', last_seen_at: null,
+      },
+      credential: { agent_key: 'oxag_public_one_time_key', shown_once: true },
+    }),
+  }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect Agent' }).first().click();
+  await expect(page.getByText('Public self-service registration issues a one-time agent key.')).toBeVisible();
+  await page.getByRole('button', { name: 'Register and issue key' }).click();
+  await expect(page.getByText('OPENX_AGENT_ID=f8b2d1c9-724e-4f16-9562-581335b2df01')).toBeVisible();
+  await expect(page.getByText('OPENX_AGENT_KEY=oxag_public_one_time_key')).toBeVisible();
+  console.log('seam:portal-public-registration');
+});

@@ -24,4 +24,31 @@ describe('Agent registration to portal fleet E2E', () => {
     const fleet = await request(app).get('/v1/agents');
     expect(fleet.body.agents).toEqual(expect.arrayContaining([expect.objectContaining({ agent_id: agentId, state: 'online' })]));
   });
+
+  it('allows public production registration while requiring the issued key for writes', async () => {
+    // seam:public-production-registration
+    const previousMode = process.env.OPENX_AGENT_REGISTRATION_MODE;
+    const previousConnectToken = process.env.OPENX_CONNECT_TOKEN;
+    const previousApiBaseUrl = process.env.OPENX_API_BASE_URL;
+    process.env.OPENX_AGENT_REGISTRATION_MODE = 'production';
+    process.env.OPENX_CONNECT_TOKEN = 'legacy-token-must-not-gate-registration';
+    process.env.OPENX_API_BASE_URL = 'https://gateway.example.com/';
+    try {
+      const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Public Production Agent', host_type: 'custom' });
+      expect(registration.status).toBe(201);
+      expect(registration.body.telemetry_endpoint).toBe('https://gateway.example.com/v1/agent/telemetry');
+
+      const agentId = registration.body.agent.agent_id;
+      const payload = { agent_id: agentId, task_id: 'public-production-001', model: 'qwen2.5-omni', status: 'success' };
+      expect((await request(app).post('/v1/agent/telemetry').send(payload)).status).toBe(401);
+      expect((await request(app).post('/v1/agent/telemetry').set('x-agent-key', registration.body.credential.agent_key).send(payload)).status).toBe(201);
+    } finally {
+      if (previousMode === undefined) delete process.env.OPENX_AGENT_REGISTRATION_MODE;
+      else process.env.OPENX_AGENT_REGISTRATION_MODE = previousMode;
+      if (previousConnectToken === undefined) delete process.env.OPENX_CONNECT_TOKEN;
+      else process.env.OPENX_CONNECT_TOKEN = previousConnectToken;
+      if (previousApiBaseUrl === undefined) delete process.env.OPENX_API_BASE_URL;
+      else process.env.OPENX_API_BASE_URL = previousApiBaseUrl;
+    }
+  });
 });
