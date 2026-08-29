@@ -428,7 +428,7 @@ app.post('/v1/agents/:agentId/audits/:auditJobId/chat', async (req: Request, res
     if (result.error === 'not_configured') { res.status(503).json({ ok: false, error: 'auditor_chat_unavailable' }); return; }
     res.status(201).json({ ok: true, turn: result.turn });
   } catch (error) {
-    res.status(502).json({ ok: false, error: 'auditor_chat_unavailable', message: error instanceof Error ? error.message.slice(0, 160) : 'Auditor chat failed' });
+    res.status(502).json({ ok: false, error: 'auditor_chat_unavailable', message: 'The auditor returned an invalid answer. Please try again.' });
   }
 });
 
@@ -738,6 +738,12 @@ app.get('/v1/agents/:agentId/usage-summary', (req: Request, res: Response): void
   if (!canReadUsageSummary(req, req.params.agentId)) { res.status(401).json({ ok: false, error: 'invalid_agent_key', message: 'A valid agent key is required to read usage' }); return; }
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : undefined;
   try { res.json({ ok: true, summary: usageLedger.summary(req.params.agentId, month) }); }
+  catch (error) { res.status(503).json({ ok: false, error: 'usage_ledger_unavailable', message: error instanceof Error ? error.message : 'Usage ledger unavailable' }); }
+});
+
+app.get('/v1/agents/:agentId/usage-detail', (req: Request, res: Response): void => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : undefined;
+  try { res.json({ ok: true, detail: usageLedger.detail(req.params.agentId, month) }); }
   catch (error) { res.status(503).json({ ok: false, error: 'usage_ledger_unavailable', message: error instanceof Error ? error.message : 'Usage ledger unavailable' }); }
 });
 

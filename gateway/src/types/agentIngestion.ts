@@ -86,6 +86,34 @@ export interface AgentUsageSummary {
   unpriced_items: number;
 }
 
+export interface AgentUsageDetail extends AgentUsageSummary {
+  tokens: {
+    input_raw: number;
+    output_generated: number;
+    cached_prompt: number;
+    reasoning_internal: number;
+    total_effective: number;
+    cache_hit_rate_pct: number;
+  };
+  economics: {
+    gross_model_cost_micro_usdc: number;
+    actual_provider_cost_micro_usdc: number;
+    revenue_micro_usdc: number;
+    net_earnings_micro_usdc: number;
+    gross_margin_pct: number | null;
+  };
+  nim_savings: {
+    total_tokens_saved: number;
+    total_avoided_cost_micro_usdc: number;
+    primitives: Array<{
+      name: string;
+      tokens_saved: number;
+      avoided_cost_micro_usdc: number;
+      percentage_reduction: number;
+    }>;
+  };
+}
+
 export interface AgentMemoryEpisodePayload {
   agent_id: string;
   episode_type: 'protocol_research' | 'market_scan' | 'execution_trace';

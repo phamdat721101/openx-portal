@@ -99,6 +99,12 @@ describe('wallet and advisory auditor APIs', () => {
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: 'The agent lesson remains relevant to this audit.', confidence: 'High', citations: [{ lesson_id: lesson.id }] }) } }] }), { status: 200 }));
       const fallbackChat = await request(app).post(`/v1/agents/${agentId}/audits/${laterJob.id}/chat`).send({ message: 'What lessons apply?', client_request_id: 'workspace-chat-fallback' });
       expect(fallbackChat.status).toBe(201); expect(fallbackChat.body.turn.citations).toEqual(expect.arrayContaining([expect.objectContaining({ id: lesson.id })]));
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: { type: 'text', text: 'The lesson is supported by the recorded evidence.' }, confidence: 'high', citations: [{ lesson_id: lesson.id }] }) } }] }), { status: 200 }));
+      const normalizedChat = await request(app).post(`/v1/agents/${agentId}/audits/${laterJob.id}/chat`).send({ message: 'Summarize the evidence.', client_request_id: 'workspace-chat-normalized' });
+      expect(normalizedChat.status).toBe(201); expect(normalizedChat.body.turn.content).toBe('The lesson is supported by the recorded evidence.');
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: { unsupported: 'shape' }, confidence: 'high', citations: [{ lesson_id: lesson.id }] }) } }] }), { status: 200 }));
+      const malformedChat = await request(app).post(`/v1/agents/${agentId}/audits/${laterJob.id}/chat`).send({ message: 'What failed?', client_request_id: 'workspace-chat-malformed' });
+      expect(malformedChat.status).toBe(502); expect(malformedChat.body).toMatchObject({ error: 'auditor_chat_unavailable', message: 'The auditor returned an invalid answer. Please try again.' }); expect(JSON.stringify(malformedChat.body)).not.toContain('invalid_type');
     } finally {
       fetchMock.mockRestore(); const restore = (key: string, value: string | undefined): void => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
       restore('ZEROG_COMPUTE_ENABLED', original.enabled); restore('ZEROG_COMPUTE_API_URL', original.url); restore('ZEROG_COMPUTE_API_KEY', original.key); restore('ZEROG_COMPUTE_MODEL', original.model);

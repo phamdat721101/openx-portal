@@ -3,11 +3,13 @@
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePortal } from '@/lib/portalContext';
+import { usePortalAuth } from './PortalAuthProvider';
 import { TrainingStagePill, MatrixChip } from '@/components/common/StatusBadge';
 import { Bot, ArrowRight, Moon, Radio, AlertCircle, Plus, X, Copy, Activity } from 'lucide-react';
 
 export default function AgentStudioPage() {
-  const { authenticated, login, agents, agentActivity, usageSummaries, registerAgent, gatewayOnline } = usePortal();
+  const { agents, agentActivity, usageSummaries, registerAgent, gatewayOnline } = usePortal();
+  const { enabled: authEnabled, ready: authReady, authenticated, login, walletAddress } = usePortalAuth();
   const [showConnect, setShowConnect] = useState(false);
   const [displayName, setDisplayName] = useState('OpenX Research Agent');
   const [hostType, setHostType] = useState<'kiro-cli' | 'claude-code' | 'adk-python' | 'custom'>('adk-python');
@@ -19,13 +21,14 @@ export default function AgentStudioPage() {
   const online = fleet.filter((item) => item.state === 'online').length;
 
   const connectAgent = async () => {
+    if (!authEnabled || !authenticated || !walletAddress) return;
     setRegistering(true);
-    const result = await registerAgent({ display_name: displayName, host_type: hostType, model, capabilities: ['telemetry', 'usage-events', 'task-lifecycle'] });
+    const result = await registerAgent({ display_name: displayName, host_type: hostType, model, capabilities: ['telemetry', 'usage-events', 'task-lifecycle'], owner_address: walletAddress || undefined, wallet_address: walletAddress || undefined });
     setRegistering(false);
     if (result.ok && result.agentId) setRegistration({ agentId: result.agentId, agentKey: result.agentKey });
   };
 
-  if (!authenticated) {
+  if (authEnabled && (!authReady || !authenticated)) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-agent-accent/15 text-agent-accent border border-agent-accent/30 shadow-[0_0_30px_rgba(124,92,255,0.25)]">
@@ -35,11 +38,11 @@ export default function AgentStudioPage() {
         <p className="max-w-md text-sm text-on-surface-variant mt-2 mb-6 leading-relaxed">
           Connect your creator wallet to manage autonomous research agents, attach skills, configure operating rules, and inspect Dream Cycle telemetry.
         </p>
-        <button
+        <button disabled={!authReady}
           onClick={login}
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 font-headline text-sm font-bold text-on-primary shadow-[0_0_20px_rgba(0,240,255,0.3)] hover:bg-[#33f3ff] transition"
         >
-          Sign In with Wallet
+          {authEnabled ? 'Sign In with Wallet' : 'Wallet Login Unavailable'}
         </button>
       </div>
     );

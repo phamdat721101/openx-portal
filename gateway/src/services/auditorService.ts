@@ -20,8 +20,18 @@ const ReviewSchema = z.object({
   lesson_reviews: z.array(z.object({ lesson_id: z.string().min(1), verdict: z.enum(['keep', 'revise', 'reject']), rationale: z.string().min(1).max(800), evidence: z.array(z.string().min(1).max(240)).max(6) })).max(30),
   skill_candidate: z.preprocess((value) => value === null ? undefined : value, z.object({ skill_slug: z.string().regex(/^[a-z0-9-]{3,64}$/), display_name: z.string().min(3).max(120), capability_ids: z.array(z.string().min(1).max(64)).min(1).max(8), rationale: z.string().min(1).max(800) }).optional()),
 }).strict();
+const normalizeAnswer = (value: unknown, depth = 0): unknown => {
+  if (typeof value === 'string' || depth >= 2 || !value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const object = value as Record<string, unknown>;
+  for (const key of ['text', 'content', 'summary', 'final', 'answer', 'message']) {
+    const normalized = normalizeAnswer(object[key], depth + 1);
+    if (typeof normalized === 'string') return normalized;
+  }
+  return value;
+};
+
 const ChatSchema = z.object({
-  answer: z.string().min(1).max(1600),
+  answer: z.preprocess((value) => normalizeAnswer(value), z.string().min(1).max(1600)),
   confidence: z.preprocess((value) => typeof value === 'string' ? value.toLowerCase() : value, z.enum(['high', 'medium', 'low'])),
   citations: z.array(z.object({ kind: z.enum(['lesson', 'review', 'context']).optional(), id: z.string().min(1).optional(), lesson_id: z.string().min(1).optional(), review_id: z.string().min(1).optional() }).passthrough()).min(1).max(8),
 }).strict();

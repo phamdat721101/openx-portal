@@ -14,7 +14,6 @@ import {
   MOCK_CREDIT_MODEL_DATA,
   DEFAULT_CREDIT_MODEL,
   MOCK_DREAM_CYCLE_DATA,
-  MOCK_OWNER_ADDRESS,
 } from './mockData';
 import {
   fetchLiveAgentStatus,
@@ -38,10 +37,6 @@ import {
 } from './api/agentGateway';
 
 interface PortalContextType {
-  authenticated: boolean;
-  activeWallet: string;
-  login: () => void;
-  logout: () => void;
   agents: StudioAgent[];
   getAgentById: (id: string) => StudioAgent | undefined;
   getSkills: (agentId: string) => SkillItem[];
@@ -104,8 +99,6 @@ function normalizeDreamCycleState(state?: Partial<DreamCycleState>): DreamCycleS
 
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [authenticated, setAuthenticated] = useState<boolean>(true);
-  const [activeWallet, setActiveWallet] = useState<string>(MOCK_OWNER_ADDRESS);
   const [agents, setAgents] = useState<StudioAgent[]>(MOCK_AGENTS);
   const [skillsData, setSkillsData] = useState<Record<string, SkillItem[]>>(MOCK_SKILLS_DATA);
   const [creditModelData, setCreditModelData] = useState<Record<string, CreditModelConfig>>(MOCK_CREDIT_MODEL_DATA);
@@ -300,17 +293,6 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
   const clearNotification = () => setNotification(null);
 
-  const login = () => {
-    setAuthenticated(true);
-    setActiveWallet(MOCK_OWNER_ADDRESS);
-    showToast('Signed in with wallet ' + MOCK_OWNER_ADDRESS.slice(0, 6) + '...' + MOCK_OWNER_ADDRESS.slice(-4), 'info');
-  };
-
-  const logout = () => {
-    setAuthenticated(false);
-    showToast('Signed out', 'info');
-  };
-
   const getAgentById = (id: string) => {
     return agents.find((a) => a.id === id || a.slug === id);
   };
@@ -425,10 +407,6 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   return (
     <PortalContext.Provider
       value={{
-        authenticated,
-        activeWallet,
-        login,
-        logout,
         agents,
         getAgentById,
         getSkills,

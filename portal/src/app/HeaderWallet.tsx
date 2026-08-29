@@ -2,11 +2,21 @@
 
 import React from 'react';
 import { usePortal } from '@/lib/portalContext';
-import { ShieldCheck, LogIn, LogOut, Wallet, Sun, Moon } from 'lucide-react';
+import { usePortalAuth } from './PortalAuthProvider';
+import { LogIn, LogOut, Sun, Moon, Copy, Check, ShieldAlert } from 'lucide-react';
 import Link from 'next/link';
 
 export function HeaderWallet() {
-  const { authenticated, activeWallet, login, logout, theme, toggleTheme } = usePortal();
+  const { theme, toggleTheme } = usePortal();
+  const { enabled, ready, authenticated, walletAddress, login, logout } = usePortalAuth();
+  const [copied, setCopied] = React.useState(false);
+  const displayWallet = walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : '';
+  const copyWallet = async () => {
+    if (!walletAddress) return;
+    await navigator.clipboard.writeText(walletAddress);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="flex items-center gap-3">
@@ -24,7 +34,11 @@ export function HeaderWallet() {
         )}
       </button>
 
-      {authenticated ? (
+      {!enabled ? (
+        <span className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-outline-variant/30 px-3 py-1.5 text-xs text-on-surface-variant" title="Set NEXT_PUBLIC_PRIVY_APP_ID to enable wallet authentication"><ShieldAlert className="h-3.5 w-3.5" />Wallet login unavailable</span>
+      ) : !ready ? (
+        <div className="h-9 w-28 animate-pulse rounded-xl bg-surface-container-high/60" />
+      ) : authenticated && walletAddress ? (
         <div className="flex items-center gap-2">
           {/* Marketplace Cross-Link */}
           <Link
@@ -35,18 +49,19 @@ export function HeaderWallet() {
           </Link>
 
           {/* Connected Wallet Pill */}
-          <div className="flex items-center gap-2 rounded-xl border border-agent-accent/30 bg-surface-container-high px-3 py-1.5">
+          <button onClick={copyWallet} className="flex items-center gap-2 rounded-xl border border-agent-accent/30 bg-surface-container-high px-3 py-1.5" title="Copy wallet address">
             <span className="h-2 w-2 rounded-full bg-secondary" />
             <span className="font-mono text-xs font-semibold text-on-surface">
-              {activeWallet.slice(0, 6)}...{activeWallet.slice(-4)}
+              {displayWallet}
             </span>
-          </div>
+            {copied ? <Check className="h-3.5 w-3.5 text-secondary" /> : <Copy className="h-3.5 w-3.5 text-on-surface-variant" />}
+          </button>
 
           {/* Disconnect Toggle */}
           <button
             onClick={logout}
             className="rounded-lg p-1.5 text-on-surface-variant hover:bg-surface-container-high hover:text-error transition"
-            title="Disconnect Mock Wallet"
+            title="Disconnect wallet"
           >
             <LogOut className="h-4 w-4" />
           </button>

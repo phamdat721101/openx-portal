@@ -18,20 +18,6 @@ export const MOCK_AGENTS: StudioAgent[] = [
     created_at: '2026-06-15T08:00:00Z',
   },
   {
-    id: 'c4e91a72-88ef-41b2-b431-7e8391b12e99',
-    slug: 'arbitrage-flow-sentinel',
-    display_name: 'Arbitrage Flow Sentinel',
-    description: 'Autonomous DEX order-book scanner and cross-chain execution validator with real-time slippage telemetry.',
-    training_stage: 3, // Orchestrator
-    owner_address: MOCK_OWNER_ADDRESS,
-    hypermove_dream_agent_id: 'hypermove_agent_sentinel_03',
-    pending_actions: {
-      dream_diffs_pending: 0,
-      federation_broadcasts_pending: 1,
-    },
-    created_at: '2026-07-01T12:30:00Z',
-  },
-  {
     id: 'b1178c43-2289-4fae-9d22-8819273c55ee',
     slug: 'solidity-fhe-auditor',
     display_name: 'Solidity & FHE Security Auditor',
@@ -106,22 +92,6 @@ export const MOCK_SKILLS_DATA: Record<string, SkillItem[]> = {
       source: 'marketplace_fork',
     },
   ],
-  'c4e91a72-88ef-41b2-b431-7e8391b12e99': [
-    {
-      id: 'skill_11',
-      name: 'cross-dex-arbitrage-scanner',
-      slug: 'cross-dex-arbitrage-scanner',
-      description: 'Continuous latency-optimized memory pool watcher scanning for atomic spread differentials.',
-      status: 'active',
-      version: 'v2.0.0',
-      trigger_patterns: ['arb_scan', 'spread_alert'],
-      audit_last_run: '2026-08-22T01:00:00Z',
-      audit_score: 95.0,
-      created_at: '2026-07-05T00:00:00Z',
-      author: 'Sentinel Team',
-      source: 'local',
-    },
-  ],
   'b1178c43-2289-4fae-9d22-8819273c55ee': [
     {
       id: 'skill_21',
@@ -154,13 +124,6 @@ export const MOCK_CREDIT_MODEL_DATA: Record<string, CreditModelConfig> = {
     per_buyer_daily_limit: 100,
     revenue_share_percentage: 85,
     updated_at: '2026-08-20T10:00:00Z',
-  },
-  'c4e91a72-88ef-41b2-b431-7e8391b12e99': {
-    price_usdc: 0.08,
-    free_trial_calls: 1,
-    per_buyer_daily_limit: 50,
-    revenue_share_percentage: 85,
-    updated_at: '2026-08-18T16:00:00Z',
   },
   'b1178c43-2289-4fae-9d22-8819273c55ee': {
     price_usdc: 0.10,
@@ -214,26 +177,6 @@ export const MOCK_DREAM_CYCLE_DATA: Record<string, DreamCycleState> = {
         synthesized_at: '2026-08-21T06:00:00Z',
       },
     ],
-  },
-  'c4e91a72-88ef-41b2-b431-7e8391b12e99': {
-    is_linked: true,
-    hypermove_dream_agent_id: 'hypermove_agent_sentinel_03',
-    rem_state: 'IDLE',
-    last_cycle_at: '2026-08-21T05:00:00Z',
-    cycle_count_total: 18,
-    memory_nodes_total: 4200,
-    wake_context: {
-      active_memory_buffer_mb: 8.2,
-      long_term_embeddings: 3100,
-      last_morning_brief_summary: 'Idle state. Awaiting new trade batch execution logs to trigger REM consolidation cycle.',
-    },
-    learning_queue: [
-      { id: 'q11', topic: 'Mempool front-running mitigation heuristic', priority: 'high', progress_pct: 60 },
-    ],
-    diagnostics: [
-      { episode_id: 'ep_18_01', timestamp: '2026-08-21T05:00:00Z', duration_sec: 120, loss_entropy: 0.065, synthesized_insights: 5, status: 'converged' },
-    ],
-    skillify_candidates: [],
   },
   'b1178c43-2289-4fae-9d22-8819273c55ee': {
     is_linked: false,

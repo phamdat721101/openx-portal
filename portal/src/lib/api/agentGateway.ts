@@ -93,6 +93,12 @@ export interface UsageSummary {
   unpriced_items: number;
 }
 
+export interface UsageDetail extends UsageSummary {
+  tokens: { input_raw: number; output_generated: number; cached_prompt: number; reasoning_internal: number; total_effective: number; cache_hit_rate_pct: number };
+  economics: { gross_model_cost_micro_usdc: number; actual_provider_cost_micro_usdc: number; revenue_micro_usdc: number; net_earnings_micro_usdc: number; gross_margin_pct: number | null };
+  nim_savings: { total_tokens_saved: number; total_avoided_cost_micro_usdc: number; primitives: Array<{ name: string; tokens_saved: number; avoided_cost_micro_usdc: number; percentage_reduction: number }> };
+}
+
 export interface RegisteredAgentProjection {
   agent_id: string;
   slug: string;
@@ -233,6 +239,15 @@ export async function fetchUsageSummary(agentId: string): Promise<UsageSummary |
     const data = await res.json();
     return data.summary || null;
   } catch { return null; }
+}
+
+export async function fetchUsageDetail(agentId: string): Promise<{ detail: UsageDetail | null; error?: string }> {
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/usage-detail`, { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+    if (!res.ok) return { detail: null, error: (await res.json().catch(() => ({}))).error || 'telemetry_unavailable' };
+    const data = await res.json();
+    return { detail: data.detail || null };
+  } catch { return { detail: null, error: 'telemetry_upstream_unavailable' }; }
 }
 
 export async function fetchRegisteredAgents(): Promise<RegisteredAgentProjection[]> {

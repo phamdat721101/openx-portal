@@ -5,10 +5,12 @@ import { PortalProvider } from '@/lib/portalContext';
 import { Toast } from '@/components/common/Toast';
 import { OpenXLogo } from '@/components/common/OpenXLogo';
 import { HeaderWallet } from './HeaderWallet';
+import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'OpenX Agent Portal — Operator Studio',
   description: 'Operator management console for OpenX autonomous research agents, skills lifecycle, operating rules, and Dream Cycle learning.',
+  icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/icon.svg' },
 };
 
 export default function RootLayout({
@@ -39,10 +41,10 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-background text-on-surface flex flex-col min-h-screen transition-colors duration-200">
-        <PortalProvider>
+        <Providers><PortalProvider>
           {/* Top Global Agent Portal Nav Header */}
           <header className="sticky top-0 z-40 border-b border-outline-variant/40 bg-surface/85 backdrop-blur-md transition-colors duration-200">
-            <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+            <div className="mx-auto grid h-16 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 sm:px-6 lg:px-8">
               {/* Logo & Sub-project Identifier */}
               <OpenXLogo
                 subText="Autonomous Agent Studio"
@@ -50,24 +52,13 @@ export default function RootLayout({
               />
 
               {/* Center Navigation & Status Bar */}
-              <div className="hidden lg:flex items-center gap-4">
-                <nav className="flex items-center gap-1 text-xs font-semibold">
-                  <Link href="/" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">
-                    Studio Hub
-                  </Link>
-                  <Link href="/docs" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">
-                    Docs
-                  </Link>
-                </nav>
-
-                <div className="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs text-primary-text font-mono">
-                  <span className="h-2 w-2 rounded-full bg-secondary animate-pulse" />
-                  <span>XRPL Testnet · x402 Micropayment Rail Active</span>
-                </div>
-              </div>
+              <nav className="hidden md:flex items-center gap-1 rounded-xl border border-outline-variant/25 bg-surface-container/60 p-1 text-xs font-semibold">
+                <Link href="/" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">Studio Hub</Link>
+                <Link href="/docs" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">Docs</Link>
+              </nav>
 
               {/* Right Wallet, Theme Toggle & Account Strip */}
-              <HeaderWallet />
+              <div className="justify-self-end"><HeaderWallet /></div>
             </div>
           </header>
 
@@ -87,13 +78,11 @@ export default function RootLayout({
               <div className="flex gap-4 font-mono text-[11px]">
                 <Link href="/docs" className="hover:text-primary transition">Docs</Link>
                 <Link href="/llms.txt" target="_blank" className="hover:text-primary transition">llms.txt</Link>
-                <a href="#" className="hover:text-primary transition">HyperMove MCP</a>
-                <a href="#" className="hover:text-primary transition">XRPL Testnet</a>
-                <a href="#" className="hover:text-primary transition">Google ADK</a>
+                <a href="https://www.hypermove.xyz/" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition">HyperMove</a>
               </div>
             </div>
           </footer>
-        </PortalProvider>
+        </PortalProvider></Providers>
       </body>
     </html>
   );

@@ -49,4 +49,28 @@ describe('usage ledger API', () => {
       else process.env.OPENX_AGENT_REGISTRATION_MODE = previousMode;
     }
   });
+
+  it('returns detailed token and savings telemetry as a read-only public projection', async () => {
+      const payload = {
+        event_id: 'detail-001', agent_id: 'usage-agent', occurred_at: '2026-08-26T12:00:00.000Z', plan_id: 'pro',
+        model_usage: [{ provider: 'google', model: 'gemini-3.5', input_tokens: 1_000_000, output_tokens: 100_000, cached_input_tokens: 500_000, reasoning_tokens: 50_000 }],
+        nim_savings: [{ primitive: 'nim-cache', model: 'gemini-3.5', token_kind: 'input' as const, baseline_tokens: 800_000, actual_tokens: 200_000 }],
+      };
+      expect((await request(app).post('/v1/agent/usage-events').send(payload)).status).toBe(201);
+      const response = await request(app).get('/v1/agents/usage-agent/usage-detail?month=2026-08');
+      expect(response.status).toBe(200);
+      expect(response.body.detail).toMatchObject({
+        tokens: { input_raw: 1_000_000, output_generated: 100_000, cached_prompt: 500_000, reasoning_internal: 50_000, total_effective: 1_650_000, cache_hit_rate_pct: 33.33 },
+        nim_savings: { total_tokens_saved: 600_000, primitives: [{ name: 'nim-cache', tokens_saved: 600_000, percentage_reduction: 75 }] },
+      });
+      expect(response.body.detail).not.toHaveProperty('events');
+      const previousMode = process.env.OPENX_AGENT_REGISTRATION_MODE;
+      process.env.OPENX_AGENT_REGISTRATION_MODE = 'production';
+      try {
+        expect((await request(app).get('/v1/agents/usage-agent/usage-detail?month=2026-08')).status).toBe(200);
+      } finally {
+        if (previousMode === undefined) delete process.env.OPENX_AGENT_REGISTRATION_MODE;
+        else process.env.OPENX_AGENT_REGISTRATION_MODE = previousMode;
+      }
+  });
 });
