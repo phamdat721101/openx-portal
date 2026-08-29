@@ -1,37 +1,43 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { usePortal } from '@/lib/portalContext';
-import { Moon, ShieldCheck, Sparkles, AlertCircle, ArrowRight, Loader2, Link2 } from 'lucide-react';
+import { fetchDreamReadiness } from '@/lib/api/agentGateway';
+import { Moon, ShieldCheck, AlertCircle, Loader2, Link2 } from 'lucide-react';
 
 interface DreamLinkCTAProps {
   agentId: string;
 }
 
 export function DreamLinkCTA({ agentId }: DreamLinkCTAProps) {
-  const { linkDreamCycle } = usePortal();
-  const [hypermoveAgentId, setHypermoveAgentId] = useState('');
+  const { setupDreamCycle } = usePortal();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<string | null>(null);
+  const [canSetup, setCanSetup] = useState(false);
+
+  const checkReadiness = async () => {
+    const result = await fetchDreamReadiness(agentId);
+    if (!result.ok) { setReadiness(result.message || result.error || 'Gateway readiness check failed.'); setCanSetup(false); return; }
+    setCanSetup(Boolean(result.self_service_enabled && result.hypermove_mcp_configured && result.using_service_credential));
+    setReadiness(result.ready ? 'HyperMove service is ready. Set up Dream Cycle with one click.' : result.message || 'Dream setup is not ready yet.');
+  };
+
+  useEffect(() => { void checkReadiness(); }, [agentId]);
 
   const handleVerifyAndLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hypermoveAgentId.trim() || loading) return;
+    if (loading) return;
 
     setError(null);
     setLoading(true);
 
-    const res = await linkDreamCycle(agentId, hypermoveAgentId.trim());
+    const res = await setupDreamCycle(agentId);
     setLoading(false);
 
     if (!res.success) {
-      setError(res.error || 'Verification failed. Agent ID not found in your HyperMove session.');
+      setError(res.error || 'Dream setup failed. Review the Gateway readiness message and retry.');
     }
-  };
-
-  const fillExample = () => {
-    setHypermoveAgentId('hypermove_agent_defi_analyst_09');
-    setError(null);
   };
 
   return (
@@ -64,44 +70,17 @@ export function DreamLinkCTA({ agentId }: DreamLinkCTAProps) {
             <span>Server-Verified Ownership Verification (Step 6-8)</span>
           </div>
           <p className="text-[11px] text-on-surface-variant leading-normal">
-            To prevent unauthorized telemetry reads, entered <code className="font-mono text-primary">agent_id</code> values are verified server-side against HyperMove's <code className="font-mono text-primary">list_my_dream_agent_ids</code> session before saving.
+            Your connected OpenX agent ID becomes the stable HyperMove Dream ID. The Gateway checks Dream readiness and sends future execution telemetry as idempotent episodes.
           </p>
         </div>
 
-        {/* Link Form */}
         <form onSubmit={handleVerifyAndLink} className="mt-6 space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                Enter your HyperMove Agent ID
-              </label>
-              <button
-                type="button"
-                onClick={fillExample}
-                className="text-[11px] text-primary hover:underline font-mono"
-              >
-                Use sample ID
+          <p className="rounded-xl border border-outline-variant/30 bg-surface-container/60 p-3 text-xs text-on-surface-variant">OpenX Portal provisions this agent’s HyperMove Dream namespace through the Gateway. No agent key or HyperMove token is stored in your browser.</p>
+          <div className="flex flex-col sm:flex-row gap-3">
+              <button type="button" onClick={checkReadiness} className="inline-flex items-center justify-center rounded-xl border border-outline-variant/50 px-4 py-3 font-headline text-xs font-bold text-on-surface hover:bg-surface-container">
+                Check readiness
               </button>
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="text"
-                required
-                value={hypermoveAgentId}
-                onChange={(e) => {
-                  setHypermoveAgentId(e.target.value);
-                  setError(null);
-                }}
-                placeholder="e.g. hypermove_agent_defi_analyst_09"
-                className="flex-1 rounded-xl border border-outline-variant/40 bg-surface-container-lowest px-4 py-3 font-mono text-sm text-on-surface focus:border-agent-accent focus:outline-none"
-              />
-
-              <button
-                type="submit"
-                disabled={loading || !hypermoveAgentId.trim()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-agent-accent px-6 py-3 font-headline text-xs font-bold text-on-agent-accent shadow-[0_0_15px_rgba(124,92,255,0.3)] hover:bg-[#6e46ff] transition active:scale-95 disabled:opacity-50"
-              >
+              <button type="submit" disabled={loading || !canSetup} className="inline-flex items-center justify-center gap-2 rounded-xl bg-agent-accent px-6 py-3 font-headline text-xs font-bold text-on-agent-accent shadow-[0_0_15px_rgba(124,92,255,0.3)] hover:bg-[#6e46ff] transition active:scale-95 disabled:opacity-50">
                 {loading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -110,11 +89,10 @@ export function DreamLinkCTA({ agentId }: DreamLinkCTAProps) {
                 ) : (
                   <>
                     <Link2 className="h-4 w-4" />
-                    Verify & Link Agent
+                    Set Up Dream Cycle
                   </>
                 )}
               </button>
-            </div>
           </div>
 
           {error && (
@@ -123,6 +101,7 @@ export function DreamLinkCTA({ agentId }: DreamLinkCTAProps) {
               <span>{error}</span>
             </div>
           )}
+          {readiness && <p className="text-xs text-on-surface-variant">{readiness}</p>}
         </form>
       </div>
     </div>

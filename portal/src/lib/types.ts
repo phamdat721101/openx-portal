@@ -6,12 +6,6 @@ export interface StudioAgent {
   training_stage: number; // 0: Onboarded, 1: SkillsAdded, 2: Evaluated, 3: Orchestrator, 4: Dreamed
   owner_address: string;
   hypermove_dream_agent_id?: string | null;
-  kpis: {
-    revenue_usdc_mtd: number;
-    hires_mtd: number;
-    reputation_score: number;
-    credits_earned_usdc_mtd: number;
-  };
   pending_actions: {
     dream_diffs_pending: number;
     federation_broadcasts_pending: number;
@@ -24,43 +18,15 @@ export interface StudioAgent {
   is_demo?: boolean;
 }
 
-export interface StudioAgentList {
-  agents: StudioAgent[];
-  aggregate: {
-    total_revenue_usdc_mtd: number;
-    total_hires_mtd: number;
-    avg_reputation_score: number;
-  };
-}
+export type SkillStatus = 'active' | 'in_audit' | 'deprecated';
 
-export interface WalletBreakdown {
-  credit_share_usdc: number;
-  x402_direct_usdc: number;
-  sub_agent_earnings_usdc: number;
+export interface SkillTelemetry {
+  total_calls: number;
+  successful_calls: number;
+  failed_calls: number;
+  avg_latency_ms: number | null;
+  last_called_at: string | null;
 }
-
-export interface LedgerItem {
-  id: string;
-  tx_hash: string;
-  timestamp: string;
-  method: 'credit' | 'exact' | 'sub_agent';
-  caller_address: string;
-  amount_usdc: number;
-  status: 'settled' | 'pending' | 'failed';
-  network: string;
-  description: string;
-}
-
-export interface AgentWalletData {
-  total_withdrawable_usdc: number;
-  breakdown: WalletBreakdown;
-  withdraw_threshold_usdc: number;
-  withdraw_cooldown_active: boolean;
-  last_withdraw_at: string | null;
-  ledger: LedgerItem[];
-}
-
-export type SkillStatus = 'active' | 'draft' | 'deprecated';
 
 export interface SkillItem {
   id: string;
@@ -71,10 +37,11 @@ export interface SkillItem {
   version: string;
   trigger_patterns: string[];
   audit_last_run: string | null;
-  audit_score?: number;
+  audit_score?: number | null;
   created_at: string;
   author: string;
   source: 'local' | 'hypermove_promoted' | 'marketplace_fork';
+  telemetry?: SkillTelemetry;
 }
 
 export interface CreditModelConfig {

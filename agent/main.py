@@ -8,24 +8,24 @@ Implements PRD 001 Agent Connection and Ingestion workflow:
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
 
-from dotenv import load_dotenv
-
+from env_loader import load_openx_env
 from gateway_client import (
     get_agent_status,
-    submit_telemetry,
+    submit_usage_event,
     submit_memory_episode,
+    sync_agent,
 )
 from tools.gws_tool import gws_read_sheet_stub
+from task_reporter import TaskReporter
 
-load_dotenv()
+load_openx_env()
 
-AGENT_ID = os.environ.get("OPENX_AGENT_ID", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
-MODEL = os.environ.get("OPENX_MODEL", "gemini-3.5")
+AGENT_ID = os.environ.get("OPENX_AGENT_ID", "").strip()
+MODEL = os.environ.get("OPENX_MODEL", "").strip()
 
 
 def build_orchestrator():
@@ -43,72 +43,73 @@ def build_orchestrator():
 
 
 def run_demo() -> int:
-    """
-    PRD 001 & Ingestion Loop:
-    1. Pre-flight self-introspection.
-    2. Tool execution (Google Workspace sheet read).
-    3. Post-execution telemetry & episode submission.
-    """
-    print(f"[openx-deep-research-analyst] Initiating pre-flight self-introspection for agent: {AGENT_ID}")
-    status = get_agent_status(AGENT_ID)
+    """Run the local demo while reporting only observed operational metadata."""
+    agent_id = os.environ.get("OPENX_AGENT_ID", "").strip()
+    model = os.environ.get("OPENX_MODEL", "").strip()
+    plan_id = os.environ.get("OPENX_PLAN_ID", "").strip()
+    missing = [name for name, value in (("OPENX_AGENT_ID", agent_id), ("OPENX_AGENT_KEY", os.environ.get("OPENX_AGENT_KEY", "").strip()), ("OPENX_MODEL", model), ("OPENX_PLAN_ID", plan_id)) if not value]
+    if missing:
+        print(f"[openx-deep-research-analyst] Missing required configuration: {', '.join(missing)}")
+        return 2
 
+    print("[openx-deep-research-analyst] Running pre-flight operational check")
+    status = get_agent_status(agent_id)
     if status.get("ok"):
-        print("[openx-deep-research-analyst] Pre-flight introspection successful:")
-        print(f"  - Model: {status.get('model', {}).get('configured_model', 'unknown')}")
+        print(f"  - Model: {status.get('model', {}).get('configured_model', model)}")
         print(f"  - Reachable: {status.get('status', {}).get('reachable', False)}")
-        print(f"  - Credits Balance: {status.get('credits', {}).get('balance_usdc', 'unauthenticated')}")
         print(f"  - Memory Episodes: {status.get('memory', {}).get('episodes', 0)}")
     else:
-        print(f"[openx-deep-research-analyst] Pre-flight warning (offline mode): {status.get('message')}")
+        print("[openx-deep-research-analyst] Pre-flight warning: Gateway status unavailable")
 
-    orchestrator = build_orchestrator()
-    print(f"[openx-deep-research-analyst] Orchestrator initialized: {orchestrator['model']}")
-
-    # Execute Tool Loop & Measure Latency
-    start_time = time.time()
-    target_list = gws_read_sheet_stub()
-    latency_ms = round((time.time() - start_time) * 1000, 2)
-    print(f"[openx-deep-research-analyst] Tool executed in {latency_ms}ms. Targets: {target_list}")
-
-    # Submit Telemetry Trace to Gateway
-    task_id = f"research_scan_{int(time.time())}"
-    tokens_consumed = 1420
-
-    print(f"[openx-deep-research-analyst] Submitting execution trace ({task_id}) to Gateway sidecar...")
-    tel_res = submit_telemetry(
-        agent_id=AGENT_ID,
-        task_id=task_id,
-        model=MODEL,
-        tokens_consumed=tokens_consumed,
-        tools_used=["google-workspace-cli.sheets.read"],
-        latency_ms=latency_ms,
-        status="success",
-        cost_usdc="0.014",
-        summary=f"Scanned {len(target_list)} DeFi targets ({', '.join(target_list)}) from Google Sheet.",
+    sync_result = sync_agent(
+        agent_id,
+        model=model,
+        tools=["google-workspace-cli.sheets.read"],
+        skills=["nim-skill"],
+        plan_id=plan_id,
     )
+    if not sync_result.get("ok"):
+        print("[openx-deep-research-analyst] Capability sync failed; task not started")
+        return 1
 
-    if tel_res.get("ok"):
-        print(f"[openx-deep-research-analyst] Trace ingested successfully (event ID: {tel_res.get('id')}).")
-    else:
-        print(f"[openx-deep-research-analyst] Trace submission note: {tel_res.get('message')}")
+    task_id = os.environ.get("OPENX_TASK_ID", "kiro-openx-portal-sync-20260826").strip()
+    task_started_at = time.time()
+    tool_id = "google-workspace-cli.sheets.read"
+    with TaskReporter(agent_id, task_id, model, "OpenX Portal synchronization", "agent_operations", [tool_id]) as reporter:
+        reporter.update("collecting_sources", 25)
+        start_time = time.time()
+        tool_result = gws_read_sheet_stub()
+        latency_ms = round((time.time() - start_time) * 1000, 2)
+        reporter.update("reporting_observed_usage", 75)
 
-    # Submit Memory Episode to Gateway
-    print(f"[openx-deep-research-analyst] Submitting research episode to Cognitive Brain...")
-    ep_res = submit_memory_episode(
-        agent_id=AGENT_ID,
-        summary=f"Synthesized yield data for {len(target_list)} DeFi protocols via Google Workspace CLI.",
-        facts_count=len(target_list),
-        confidence=0.96,
-        episode_type="protocol_research",
-        entities=target_list,
+    # The tool result is intentionally not printed or transmitted: it may contain
+    # customer/project data. Only the observed call and latency are safe to report.
+    print(f"[openx-deep-research-analyst] Observed one tool call in {latency_ms}ms")
+    usage_result = submit_usage_event(
+        event_id=f"{task_id}:usage",
+        agent_id=agent_id,
+        occurred_at=time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(task_started_at)),
+        tool_calls=[{"tool_id": tool_id, "calls": 1, "outcome": "success", "latency_ms": latency_ms}],
+        plan_id=plan_id,
     )
+    if not usage_result.get("ok"):
+        print("[openx-deep-research-analyst] Usage synchronization failed")
+        return 1
 
-    if ep_res.get("ok"):
-        print(f"[openx-deep-research-analyst] Episode ingested successfully (event ID: {ep_res.get('id')}).")
-    else:
-        print(f"[openx-deep-research-analyst] Episode submission note: {ep_res.get('message')}")
+    # Keep the optional memory record generic; do not send tool output, targets,
+    # prompts, arguments, or response bodies to the Gateway.
+    episode_result = submit_memory_episode(
+        agent_id=agent_id,
+        summary="Completed one connected-agent operational synchronization task.",
+        facts_count=1,
+        confidence=1.0,
+        episode_type="execution_trace",
+        entities=[],
+    )
+    if not episode_result.get("ok"):
+        print("[openx-deep-research-analyst] Memory synchronization note: Gateway rejected the episode")
 
-    print("[openx-deep-research-analyst] Deep Research loop execution complete.")
+    print("[openx-deep-research-analyst] Agent task completed")
     return 0
 
 

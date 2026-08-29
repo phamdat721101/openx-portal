@@ -1,9 +1,7 @@
 # Phase 1 dependencies — Google ADK + Gemini 3.5 orchestration loop.
-# TODO: verify exact package name/version against your installed google-adk release —
 # the ADK's public package name/API surface may have shifted since this PRD was written
 # (Gstack pre-mortem T1). Pin exact versions once verified, per this workspace's
 # "exact-or-pinned versions, no open ranges" dependency convention.
 google-adk
 google-generativeai
-python-dotenv
 requests

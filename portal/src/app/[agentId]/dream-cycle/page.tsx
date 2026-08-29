@@ -19,7 +19,7 @@ export default function DreamCyclePage({ params }: { params: { agentId: string }
   return (
     <div className="space-y-6">
       {/* 1. Real-time REM State & Wake Telemetry */}
-      <DreamTelemetry state={state} />
+      <DreamTelemetry agentId={params.agentId} state={state} />
 
       {/* 2. Autonomous Skillify Synthesis Board (Human Review Gated) */}
       <SkillifyBoardView agentId={params.agentId} candidates={state.skillify_candidates} />

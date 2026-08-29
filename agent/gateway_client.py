@@ -13,13 +13,91 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import time
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-GATEWAY_BASE_URL = os.environ.get("OPENX_GATEWAY_URL", "http://localhost:7411")
 
 
+
+
+RETRYABLE_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
+
+
+def _gateway_url() -> str:
+    return os.environ.get("OPENX_GATEWAY_URL", "http://localhost:7411").rstrip("/")
+
+
+def _agent_headers(require_key: bool = False) -> Dict[str, str]:
+    key = os.environ.get("OPENX_AGENT_KEY", "").strip()
+    if require_key and not key:
+        raise RuntimeError("OPENX_AGENT_KEY is required for authenticated agent writes")
+    return {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        **({"x-agent-key": key} if key else {}),
+    }
+
+
+def _retry_settings() -> tuple[int, float]:
+    try:
+        attempts = max(1, min(6, int(os.environ.get("OPENX_SYNC_MAX_ATTEMPTS", "4"))))
+    except ValueError:
+        attempts = 4
+    try:
+        backoff = max(0.0, min(30.0, float(os.environ.get("OPENX_SYNC_BACKOFF_SECONDS", "0.5"))))
+    except ValueError:
+        backoff = 0.5
+    return attempts, backoff
+
+
+def _response_body(response: Any) -> Dict[str, Any]:
+    raw = response.read().decode("utf-8")
+    if not raw:
+        return {"ok": True}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "invalid_gateway_response"}
+
+
+def _post_json(
+    path: str,
+    payload: Dict[str, Any],
+    *,
+    error_code: str,
+    timeout_seconds: float,
+    require_key: bool = True,
+) -> Dict[str, Any]:
+    try:
+        headers = _agent_headers(require_key=require_key)
+    except RuntimeError as error:
+        return {"ok": False, "error": "missing_openx_agent_key", "message": str(error)}
+
+    attempts, backoff = _retry_settings()
+    url = f"{_gateway_url()}{path}"
+    last_message = "request failed"
+    for attempt in range(attempts):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+                return _response_body(response)
+        except urllib.error.HTTPError as error:
+            last_message = f"Gateway HTTP Error {error.code}: {error.reason}"
+            if error.code not in RETRYABLE_HTTP_STATUS or attempt == attempts - 1:
+                return {"ok": False, "error": error_code, "message": last_message, "status": error.code}
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_message = f"Gateway request failed: {str(error)[:200]}"
+            if attempt == attempts - 1:
+                return {"ok": False, "error": error_code, "message": last_message}
+        time.sleep(backoff * (2 ** attempt))
+    return {"ok": False, "error": error_code, "message": last_message}
 def register_agent(
     display_name: str,
     host_type: str,
@@ -40,7 +118,7 @@ def register_agent(
         payload["agent_id"] = agent_id
 
     req = urllib.request.Request(
-        f"{GATEWAY_BASE_URL.rstrip('/')}/v1/agent/register",
+        f"{_gateway_url()}/v1/agent/register",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
@@ -70,7 +148,7 @@ def get_agent_status(
     if fields:
         query_params["fields"] = ",".join(fields)
 
-    url = f"{GATEWAY_BASE_URL.rstrip('/')}/v1/agent/status?{urllib.parse.urlencode(query_params)}"
+    url = f"{_gateway_url()}/v1/agent/status?{urllib.parse.urlencode(query_params)}"
 
     req = urllib.request.Request(
         url,
@@ -104,51 +182,100 @@ def get_agent_status(
 def submit_telemetry(
     agent_id: str,
     task_id: str,
-    model: str = "gemini-3.5",
-    tokens_consumed: int = 0,
+    model: str = "",
+    tokens_consumed: Optional[int] = None,
     tools_used: Optional[List[str]] = None,
-    latency_ms: float = 0.0,
+    latency_ms: Optional[float] = None,
     status: str = "success",
-    cost_usdc: Optional[str] = None,
     summary: Optional[str] = None,
+    task_state: Optional[str] = None,
+    task_title: Optional[str] = None,
+    task_category: Optional[str] = None,
+    current_phase: Optional[str] = None,
+    progress_pct: Optional[float] = None,
     timeout_seconds: float = 5.0,
 ) -> Dict[str, Any]:
-    """
-    Submits execution traces and token metrics to POST /v1/agent/telemetry.
-    """
-    url = f"{GATEWAY_BASE_URL.rstrip('/')}/v1/agent/telemetry"
-    payload = {
+    """Submit safe task metadata; unknown provider token dimensions are omitted."""
+    payload: Dict[str, Any] = {
         "agent_id": agent_id,
         "task_id": task_id,
         "model": model,
-        "tokens_consumed": tokens_consumed,
         "tools_used": tools_used or [],
-        "latency_ms": latency_ms,
         "status": status,
-        "cost_usdc": cost_usdc,
-        "summary": summary,
     }
-
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            **({"x-agent-key": os.environ["OPENX_AGENT_KEY"]} if os.environ.get("OPENX_AGENT_KEY") else {}),
-        },
-        method="POST",
+    optional = {
+        "tokens_consumed": tokens_consumed,
+        "latency_ms": latency_ms,
+        "summary": summary,
+        "task_state": task_state,
+        "task_title": task_title,
+        "task_category": task_category,
+        "current_phase": current_phase,
+        "progress_pct": progress_pct,
+    }
+    payload.update({key: value for key, value in optional.items() if value is not None})
+    return _post_json(
+        "/v1/agent/telemetry",
+        payload,
+        error_code="submission_failed",
+        timeout_seconds=timeout_seconds,
+        require_key=True,
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "submission_failed",
-            "message": f"Failed to submit telemetry to {url}: {str(e)[:200]}",
-        }
+
+def submit_usage_event(
+    event_id: str,
+    agent_id: str,
+    occurred_at: str,
+    model_usage: Optional[List[Dict[str, Any]]] = None,
+    tool_calls: Optional[List[Dict[str, Any]]] = None,
+    skill_invocations: Optional[List[Dict[str, Any]]] = None,
+    nim_savings: Optional[List[Dict[str, Any]]] = None,
+    plan_id: Optional[str] = None,
+    timeout_seconds: float = 5.0,
+) -> Dict[str, Any]:
+    """Submit idempotent, metadata-only usage; only caller-observed dimensions are sent."""
+    payload: Dict[str, Any] = {
+        "event_id": event_id,
+        "agent_id": agent_id,
+        "occurred_at": occurred_at,
+        "model_usage": model_usage or [],
+        "tool_calls": tool_calls or [],
+        "skill_invocations": skill_invocations or [],
+        "nim_savings": nim_savings or [],
+    }
+    if plan_id:
+        payload["plan_id"] = plan_id
+    return _post_json(
+        "/v1/agent/usage-events",
+        payload,
+        error_code="usage_submission_failed",
+        timeout_seconds=timeout_seconds,
+        require_key=True,
+    )
+
+
+def sync_agent(
+    agent_id: str,
+    model: Optional[str] = None,
+    tools: Optional[List[str]] = None,
+    skills: Optional[List[str]] = None,
+    plan_id: Optional[str] = None,
+    timeout_seconds: float = 5.0,
+) -> Dict[str, Any]:
+    """Push a compact capability snapshot; credentials are required and the call is retryable."""
+    payload: Dict[str, Any] = {"agent_id": agent_id, "tools": tools or [], "skills": skills or []}
+    if model:
+        payload["model"] = model
+    if plan_id:
+        payload["plan_id"] = plan_id
+    return _post_json(
+        "/v1/agent/sync",
+        payload,
+        error_code="sync_failed",
+        timeout_seconds=timeout_seconds,
+        require_key=True,
+    )
 
 
 def submit_memory_episode(
@@ -163,7 +290,7 @@ def submit_memory_episode(
     """
     Submits a synthesized research episode to POST /v1/agent/memory/episode.
     """
-    url = f"{GATEWAY_BASE_URL.rstrip('/')}/v1/agent/memory/episode"
+    url = f"{_gateway_url()}/v1/agent/memory/episode"
     payload = {
         "agent_id": agent_id,
         "episode_type": episode_type,
@@ -202,7 +329,7 @@ def submit_candidate_skill(
     """
     Submits a newly synthesized reusable skill to POST /v1/agent/skills/candidate.
     """
-    url = f"{GATEWAY_BASE_URL.rstrip('/')}/v1/agent/skills/candidate"
+    url = f"{_gateway_url()}/v1/agent/skills/candidate"
     payload = {
         "agent_id": agent_id,
         "skill_slug": skill_slug,
@@ -235,5 +362,5 @@ def request_gated_feed(feed_id: str) -> dict:
     """
     raise NotImplementedError(
         "Phase 2 x402 payment flow is being wired. See gateway/ for the Node-side sidecar "
-        f"(target URL: {GATEWAY_BASE_URL}/v1/supplier/defi?feedId={feed_id})."
+        f"(target URL: {_gateway_url()}/v1/supplier/defi?feedId={feed_id})."
     )

@@ -7,8 +7,8 @@ import { OpenXLogo } from '@/components/common/OpenXLogo';
 import { HeaderWallet } from './HeaderWallet';
 
 export const metadata: Metadata = {
-  title: 'OpenX Agent Portal — Studio & Monetization Hub',
-  description: 'High-density operator management console for OpenX autonomous research agents, wallet earnings, skills lifecycle, credit models, and Dream Cycle learning.',
+  title: 'OpenX Agent Portal — Operator Studio',
+  description: 'Operator management console for OpenX autonomous research agents, skills lifecycle, operating rules, and Dream Cycle learning.',
 };
 
 export default function RootLayout({
@@ -55,9 +55,6 @@ export default function RootLayout({
                   <Link href="/" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">
                     Studio Hub
                   </Link>
-                  <Link href="/connect" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">
-                    Connect Agent
-                  </Link>
                   <Link href="/docs" className="px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition">
                     Docs
                   </Link>
@@ -89,7 +86,6 @@ export default function RootLayout({
               <span>@openx/agent-portal · Version 1.0.0 (Operator Register)</span>
               <div className="flex gap-4 font-mono text-[11px]">
                 <Link href="/docs" className="hover:text-primary transition">Docs</Link>
-                <Link href="/connect" className="hover:text-primary transition">Connect</Link>
                 <Link href="/llms.txt" target="_blank" className="hover:text-primary transition">llms.txt</Link>
                 <a href="#" className="hover:text-primary transition">HyperMove MCP</a>
                 <a href="#" className="hover:text-primary transition">XRPL Testnet</a>

@@ -30,11 +30,11 @@ export function SkillStatusPill({ status }: SkillStatusPillProps) {
           Active
         </span>
       );
-    case 'draft':
+    case 'in_audit':
       return (
         <span className="inline-flex items-center gap-1 rounded bg-surface-container-high px-2 py-0.5 font-mono text-xs font-medium text-on-surface-variant border border-outline-variant/40">
           <Clock className="h-3 w-3" />
-          Draft
+          In audit
         </span>
       );
     case 'deprecated':

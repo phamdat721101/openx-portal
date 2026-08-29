@@ -1,4 +1,4 @@
-import { StudioAgent, AgentWalletData, SkillItem, CreditModelConfig, DreamCycleState } from './types';
+import { StudioAgent, SkillItem, CreditModelConfig, DreamCycleState } from './types';
 
 export const MOCK_OWNER_ADDRESS = '0x8f3C785B0B2E6A17e914041b312bBc92651B5A44';
 
@@ -11,12 +11,6 @@ export const MOCK_AGENTS: StudioAgent[] = [
     training_stage: 4, // Dreamed
     owner_address: MOCK_OWNER_ADDRESS,
     hypermove_dream_agent_id: 'hypermove_agent_defi_analyst_09',
-    kpis: {
-      revenue_usdc_mtd: 342.80,
-      hires_mtd: 128,
-      reputation_score: 98.4,
-      credits_earned_usdc_mtd: 280.00,
-    },
     pending_actions: {
       dream_diffs_pending: 2,
       federation_broadcasts_pending: 0,
@@ -31,12 +25,6 @@ export const MOCK_AGENTS: StudioAgent[] = [
     training_stage: 3, // Orchestrator
     owner_address: MOCK_OWNER_ADDRESS,
     hypermove_dream_agent_id: 'hypermove_agent_sentinel_03',
-    kpis: {
-      revenue_usdc_mtd: 189.50,
-      hires_mtd: 74,
-      reputation_score: 94.1,
-      credits_earned_usdc_mtd: 140.00,
-    },
     pending_actions: {
       dream_diffs_pending: 0,
       federation_broadcasts_pending: 1,
@@ -51,12 +39,6 @@ export const MOCK_AGENTS: StudioAgent[] = [
     training_stage: 1, // SkillsAdded (Unlinked to Dream Cycle)
     owner_address: MOCK_OWNER_ADDRESS,
     hypermove_dream_agent_id: null,
-    kpis: {
-      revenue_usdc_mtd: 45.00,
-      hires_mtd: 12,
-      reputation_score: 89.0,
-      credits_earned_usdc_mtd: 30.00,
-    },
     pending_actions: {
       dream_diffs_pending: 0,
       federation_broadcasts_pending: 0,
@@ -64,125 +46,6 @@ export const MOCK_AGENTS: StudioAgent[] = [
     created_at: '2026-08-10T14:15:00Z',
   },
 ];
-
-export const MOCK_WALLET_DATA: Record<string, AgentWalletData> = {
-  'f8b2d1c9-724e-4f16-9562-581335b2df01': {
-    total_withdrawable_usdc: 42.10,
-    breakdown: {
-      credit_share_usdc: 30.00,
-      x402_direct_usdc: 10.00,
-      sub_agent_earnings_usdc: 2.10,
-    },
-    withdraw_threshold_usdc: 5.00,
-    withdraw_cooldown_active: false,
-    last_withdraw_at: '2026-08-15T09:00:00Z',
-    ledger: [
-      {
-        id: 'tx_01',
-        tx_hash: '0x3a9f...8821',
-        timestamp: '2026-08-22T13:45:10Z',
-        method: 'credit',
-        caller_address: '0x71C...B991',
-        amount_usdc: 0.15,
-        status: 'settled',
-        network: 'XRPL Testnet (RLUSD)',
-        description: 'Multi-hop liquidity report execution (credit deduction)',
-      },
-      {
-        id: 'tx_02',
-        tx_hash: '0x99e1...12bf',
-        timestamp: '2026-08-22T11:20:00Z',
-        method: 'exact',
-        caller_address: '0x14E...A450',
-        amount_usdc: 0.05,
-        status: 'settled',
-        network: 'XRPL x402',
-        description: 'Direct query: XRP/RLUSD volatility metrics',
-      },
-      {
-        id: 'tx_03',
-        tx_hash: '0x44cd...01fe',
-        timestamp: '2026-08-21T22:15:30Z',
-        method: 'sub_agent',
-        caller_address: '0x889...CC22',
-        amount_usdc: 0.70,
-        status: 'settled',
-        network: 'OpenX Sub-Agent Rail',
-        description: 'Sub-agent task delegation from Portfolio Manager Agent',
-      },
-      {
-        id: 'tx_04',
-        tx_hash: '0x12bb...33df',
-        timestamp: '2026-08-21T18:04:12Z',
-        method: 'credit',
-        caller_address: '0x5F2...E891',
-        amount_usdc: 0.15,
-        status: 'settled',
-        network: 'XRPL Testnet (RLUSD)',
-        description: 'Yield farm impermanent loss risk computation',
-      },
-      {
-        id: 'tx_05',
-        tx_hash: '0x88a2...661c',
-        timestamp: '2026-08-20T09:30:45Z',
-        method: 'exact',
-        caller_address: '0x310...77A1',
-        amount_usdc: 0.05,
-        status: 'settled',
-        network: 'XRPL x402',
-        description: 'Direct query: Lending pool rate monitor',
-      },
-    ],
-  },
-  'c4e91a72-88ef-41b2-b431-7e8391b12e99': {
-    total_withdrawable_usdc: 18.50,
-    breakdown: {
-      credit_share_usdc: 12.00,
-      x402_direct_usdc: 4.50,
-      sub_agent_earnings_usdc: 2.00,
-    },
-    withdraw_threshold_usdc: 5.00,
-    withdraw_cooldown_active: false,
-    last_withdraw_at: '2026-08-18T14:20:00Z',
-    ledger: [
-      {
-        id: 'tx_11',
-        tx_hash: '0x55aa...1122',
-        timestamp: '2026-08-22T08:12:00Z',
-        method: 'credit',
-        caller_address: '0x992...33FF',
-        amount_usdc: 0.20,
-        status: 'settled',
-        network: 'XRPL Testnet (RLUSD)',
-        description: 'Cross-DEX atomic swap route audit',
-      },
-    ],
-  },
-  'b1178c43-2289-4fae-9d22-8819273c55ee': {
-    total_withdrawable_usdc: 3.20,
-    breakdown: {
-      credit_share_usdc: 3.20,
-      x402_direct_usdc: 0.00,
-      sub_agent_earnings_usdc: 0.00,
-    },
-    withdraw_threshold_usdc: 5.00,
-    withdraw_cooldown_active: true,
-    last_withdraw_at: null,
-    ledger: [
-      {
-        id: 'tx_21',
-        tx_hash: '0x77ee...9900',
-        timestamp: '2026-08-22T04:10:00Z',
-        method: 'credit',
-        caller_address: '0x123...4567',
-        amount_usdc: 3.20,
-        status: 'settled',
-        network: 'XRPL Testnet (RLUSD)',
-        description: 'Smart contract vulnerability scan',
-      },
-    ],
-  },
-};
 
 export const MOCK_SKILLS_DATA: Record<string, SkillItem[]> = {
   'f8b2d1c9-724e-4f16-9562-581335b2df01': [
@@ -265,7 +128,7 @@ export const MOCK_SKILLS_DATA: Record<string, SkillItem[]> = {
       name: 'solidity-ast-parser',
       slug: 'solidity-ast-parser',
       description: 'Extracts execution control flow graphs and checks for re-entrancy / integer bounds.',
-      status: 'draft',
+      status: 'in_audit',
       version: 'v0.1.0',
       trigger_patterns: ['ast_parse', 'ast_check'],
       audit_last_run: null,

@@ -21,14 +21,13 @@ OpenX Deep Research Analyst is an autonomous agent infrastructure combining:
 ## 2. Agent Introspection API (Read Path)
 
 ### GET /v1/agent/status
-Retrieves 5 core operational domains for an agent in a single round-trip.
+Retrieves 4 core operational domains for an agent in a single round-trip.
 
-**Endpoint:** \`http://localhost:7411/v1/agent/status?agentId=<uuid>&fields=info,status,model,credits,memory\`
+**Endpoint:** \`http://localhost:7411/v1/agent/status?agentId=<uuid>&fields=info,status,model,memory\`
 
 **Headers:**
 - \`Accept: application/json\`
 - \`x-erc8004-agent-id\`: (Optional) On-chain ERC-8004 agent identifier.
-- \`Authorization\`: (Optional) Bearer token for credit balance queries.
 
 **Response Schema (JSON):**
 \`\`\`json
@@ -51,12 +50,6 @@ Retrieves 5 core operational domains for an agent in a single round-trip.
   "model": {
     "configured_model": "gemini-3.5",
     "packages": [{ "kit_slug": "google-workspace-cli", "capability_ids": ["sheets.read", "docs.write"] }]
-  },
-  "credits": {
-    "balance_usdc": "42.100000",
-    "consumed_usdc_mtd": "8.500000",
-    "welcome_granted": true,
-    "reason": null
   },
   "memory": {
     "episodes": 128,
@@ -82,12 +75,26 @@ Submits execution traces, token consumption, latency, and tool invocations.
   "agent_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "task_id": "task_defi_yield_analysis_001",
   "model": "gemini-3.5",
-  "tokens_consumed": 1420,
   "tools_used": ["google-workspace-cli.sheets.read"],
   "latency_ms": 680,
-  "status": "success",
-  "cost_usdc": "0.014",
-  "summary": "Completed competitive yield scan across 3 DeFi protocols."
+  "status": "success"
+}
+\`\`\`
+
+### POST /v1/agent/usage-events
+For every task, send detailed model usage, tool and skill calls, and measured nim-skill token savings. Never send raw prompts, tool arguments, secrets, or response bodies.
+
+**Headers:** \`x-agent-key: <one-time registration key>\`
+**Payload:**
+\`\`\`json
+{
+  "event_id": "unique-task-step-id",
+  "agent_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "occurred_at": "2026-08-26T12:00:00.000Z",
+  "plan_id": "starter",
+  "model_usage": [{ "provider": "google", "model": "gemini-3.5", "input_tokens": 1200, "output_tokens": 450 }],
+  "tool_calls": [{ "tool_id": "google-search", "calls": 1, "outcome": "success" }],
+  "nim_savings": [{ "primitive": "nim-logcompact", "model": "gemini-3.5", "token_kind": "input", "baseline_tokens": 1800, "actual_tokens": 600 }]
 }
 \`\`\`
 

@@ -38,7 +38,7 @@ export function SkillsTable({ skills, onStatusChange, onOpenUpload }: SkillsTabl
               <th className="py-2.5 px-4 font-semibold">Skill Name & Version</th>
               <th className="py-2.5 px-4 font-semibold">Status</th>
               <th className="py-2.5 px-4 font-semibold">Trigger Patterns</th>
-              <th className="py-2.5 px-4 font-semibold">Last Audit / Health</th>
+              <th className="py-2.5 px-4 font-semibold">Audit / Execution</th>
               <th className="py-2.5 px-4 font-semibold">Source</th>
               <th className="py-2.5 px-4 font-semibold text-right">Actions</th>
             </tr>
@@ -90,7 +90,12 @@ export function SkillsTable({ skills, onStatusChange, onOpenUpload }: SkillsTabl
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {skill.audit_last_run ? (
+                      {skill.telemetry && skill.telemetry.total_calls > 0 ? (
+                        <div className="font-mono text-[10px] text-on-surface-variant space-y-0.5">
+                          <div>{skill.telemetry.total_calls} calls · {skill.telemetry.failed_calls} failed</div>
+                          <div>{skill.telemetry.avg_latency_ms ? `${skill.telemetry.avg_latency_ms}ms avg` : 'Latency unavailable'}{skill.telemetry.last_called_at ? ` · ${new Date(skill.telemetry.last_called_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}</div>
+                        </div>
+                      ) : skill.audit_last_run ? (
                         <div className="flex items-center gap-1.5 font-mono text-[11px] text-on-surface-variant">
                           <ShieldCheck className="h-3.5 w-3.5 text-secondary" />
                           <span>
@@ -134,7 +139,7 @@ export function SkillsTable({ skills, onStatusChange, onOpenUpload }: SkillsTabl
                         </button>
                       )}
 
-                      {skill.status === 'draft' && (
+                      {skill.status === 'in_audit' && (
                         <button
                           onClick={() => onStatusChange(skill.id, 'active')}
                           className="inline-flex items-center gap-1 rounded-lg bg-primary/20 border border-primary/40 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary hover:text-on-primary transition"

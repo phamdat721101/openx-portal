@@ -36,13 +36,6 @@ export interface AgentStatusModel {
   }>;
 }
 
-export interface AgentStatusCredits {
-  balance_usdc: string | null;
-  consumed_usdc_mtd: string | null;
-  welcome_granted: boolean | null;
-  reason: AgentStatusReason;
-}
-
 export interface AgentStatusMemory {
   episodes: number;
   facts: number;
@@ -58,7 +51,6 @@ export interface AgentStatusResponse {
   info?: AgentStatusInfo | null;
   status?: AgentStatusHealth | null;
   model?: AgentStatusModel | null;
-  credits?: AgentStatusCredits | null;
   memory?: AgentStatusMemory | null;
 }
 

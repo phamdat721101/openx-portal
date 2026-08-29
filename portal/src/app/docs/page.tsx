@@ -22,12 +22,11 @@ export default function DocsPage() {
     "agent_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     "task_id": "task_defi_yield_scan",
     "model": "gemini-3.5",
-    "tokens_consumed": 1420,
     "tools_used": ["google-workspace-cli.sheets.read"],
     "latency_ms": 580,
-    "status": "success",
-    "cost_usdc": "0.014"
+    "status": "success"
   }'`;
+  const usagePrompt = 'For every task, emit a usage event for each model request, tool/skill call, and nim-skill operation. Send token counts and billable units, never raw prompts or arguments. Report baseline and actual tokens only when measured.';
 
   const pythonSnippet = `from gateway_client import get_agent_status, submit_telemetry
 
@@ -40,7 +39,6 @@ submit_telemetry(
     agent_id="3fa85f64-5717-4562-b3fc-2c963f66afa6",
     task_id="task_yield_analysis",
     model="gemini-3.5",
-    tokens_consumed=1420,
     tools=["google-workspace-cli.sheets.read"],
     latency_ms=580,
     status="success"
@@ -75,6 +73,10 @@ submit_telemetry(
         </div>
       </div>
 
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="flex items-center justify-between gap-3"><div><h2 className="font-headline text-sm font-bold text-on-surface">Usage Accounting Agent Instruction</h2><p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{usagePrompt}</p></div><button onClick={() => copyToClipboard(usagePrompt, 'usage-prompt')} className="shrink-0 text-xs text-primary">{copiedSection === 'usage-prompt' ? 'Copied' : 'Copy prompt'}</button></div>
+      </div>
+
       {/* Grid Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-2xl border border-outline-variant/30 bg-surface-container-low p-5">
@@ -83,7 +85,7 @@ submit_telemetry(
             <span>1. Introspection (Read)</span>
           </div>
           <p className="text-xs text-on-surface-variant leading-relaxed">
-            Single-call <code className="text-primary font-mono">GET /v1/agent/status</code> composing info, status, model, credits, and cognitive memory.
+            Single-call <code className="text-primary font-mono">GET /v1/agent/status</code> composing info, status, model, and cognitive memory. No balance or earnings data is returned.
           </p>
         </div>
 
@@ -124,7 +126,7 @@ submit_telemetry(
           </button>
         </div>
         <p className="text-xs text-on-surface-variant leading-relaxed">
-          Queries all 5 operational facets before initiating autonomous task loops. Supports field narrowing via <code className="font-mono text-primary">?fields=info,status,model,credits,memory</code>.
+          Queries all 4 operational facets before initiating autonomous task loops. Supports field narrowing via <code className="font-mono text-primary">?fields=info,status,model,memory</code>.
         </p>
         <pre className="rounded-xl bg-surface-container-lowest p-4 font-mono text-xs text-on-surface overflow-x-auto border border-outline-variant/20">
           {curlStatus}
@@ -147,7 +149,7 @@ submit_telemetry(
           </button>
         </div>
         <p className="text-xs text-on-surface-variant leading-relaxed">
-          Submits execution telemetry, token consumption, tools used, and task latency. Immediately updates the Portal earnings, hires, and activity records.
+          Submits execution telemetry, token consumption, tools used, and task latency. Immediately updates the Portal activity records.
         </p>
         <pre className="rounded-xl bg-surface-container-lowest p-4 font-mono text-xs text-on-surface overflow-x-auto border border-outline-variant/20">
           {curlTelemetry}
@@ -181,13 +183,13 @@ submit_telemetry(
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-6 rounded-2xl border border-primary/30 bg-primary/5">
         <div>
           <h3 className="font-headline text-sm font-bold text-on-surface">Ready to onboard a new agent?</h3>
-          <p className="text-xs text-on-surface-variant mt-0.5">Visit the Connect Console to issue credentials and view live telemetry heartbeats.</p>
+          <p className="text-xs text-on-surface-variant mt-0.5">Studio Hub is the single workspace for connected-agent activity and task status.</p>
         </div>
         <Link
-          href="/connect"
+          href="/"
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 font-headline text-xs font-bold text-on-primary shadow-sm hover:bg-[#33f3ff] transition"
         >
-          <span>Go to Connect Console</span>
+          <span>Open Studio Hub</span>
           <ArrowRight className="h-4 w-4" />
         </Link>
       </div>

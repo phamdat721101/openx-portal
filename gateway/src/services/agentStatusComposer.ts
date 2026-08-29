@@ -7,7 +7,6 @@ import {
   AgentStatusInfo,
   AgentStatusHealth,
   AgentStatusModel,
-  AgentStatusCredits,
   AgentStatusMemory,
 } from '../types/agentStatus.js';
 import { agentIngestionStore } from './agentIngestionStore.js';
@@ -21,12 +20,11 @@ export interface ComposeAgentStatusOptions {
     info?: Partial<AgentStatusInfo>;
     status?: Partial<AgentStatusHealth>;
     model?: Partial<AgentStatusModel>;
-    credits?: Partial<AgentStatusCredits>;
     memory?: Partial<AgentStatusMemory>;
   };
 }
 
-export const VALID_FIELDS = ['info', 'status', 'model', 'credits', 'memory'] as const;
+export const VALID_FIELDS = ['info', 'status', 'model', 'memory'] as const;
 export type ValidField = (typeof VALID_FIELDS)[number];
 
 export function parseFields(fieldsParam?: string): {
@@ -206,69 +204,6 @@ export async function composeAgentStatus(
         response.model = {
           configured_model: null,
           packages: [],
-        };
-      }
-    }
-  }
-
-  // 4. Domain: CREDITS
-  if (fieldsSet.has('credits')) {
-    if (mockUpstream?.credits) {
-      response.credits = {
-        balance_usdc: mockUpstream.credits.balance_usdc ?? '42.100000',
-        consumed_usdc_mtd: mockUpstream.credits.consumed_usdc_mtd ?? '8.500000',
-        welcome_granted: mockUpstream.credits.welcome_granted ?? true,
-        reason: mockUpstream.credits.reason ?? null,
-      };
-    } else if (!authHeader) {
-      // Auth blocker surfaced explicitly per PRD §7.2
-      response.credits = {
-        balance_usdc: null,
-        consumed_usdc_mtd: null,
-        welcome_granted: null,
-        reason: 'auth_required',
-      };
-    } else if (!baseUrl) {
-      response.credits = {
-        balance_usdc: null,
-        consumed_usdc_mtd: null,
-        welcome_granted: null,
-        reason: 'upstream_unreachable',
-      };
-    } else {
-      try {
-        const res = await fetch(`${baseUrl}/v3/credits/me`, {
-          headers: { Authorization: authHeader },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as any;
-          response.credits = {
-            balance_usdc: String(data.balance_usdc ?? '0.000000'),
-            consumed_usdc_mtd: String(data.consumed_usdc_mtd ?? '0.000000'),
-            welcome_granted: Boolean(data.welcome_granted),
-            reason: null,
-          };
-        } else if (res.status === 401 || res.status === 403) {
-          response.credits = {
-            balance_usdc: null,
-            consumed_usdc_mtd: null,
-            welcome_granted: null,
-            reason: 'auth_required',
-          };
-        } else {
-          response.credits = {
-            balance_usdc: null,
-            consumed_usdc_mtd: null,
-            welcome_granted: null,
-            reason: 'upstream_unreachable',
-          };
-        }
-      } catch {
-        response.credits = {
-          balance_usdc: null,
-          consumed_usdc_mtd: null,
-          welcome_granted: null,
-          reason: 'upstream_unreachable',
         };
       }
     }

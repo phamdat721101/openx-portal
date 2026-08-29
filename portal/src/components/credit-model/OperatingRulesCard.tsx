@@ -37,10 +37,10 @@ export function OperatingRulesCard({ agentId, config }: OperatingRulesCardProps)
           </div>
           <div>
             <h3 className="font-headline text-base font-bold text-on-surface">
-              Monetization & Operating Rules Object
+              Service Access & Operating Rules
             </h3>
             <p className="text-xs text-on-surface-variant">
-              Post-publish paywall and buyer access configuration (merged into agents.pricing)
+              Service access configuration for connected clients
             </p>
           </div>
         </div>
@@ -59,7 +59,7 @@ export function OperatingRulesCard({ agentId, config }: OperatingRulesCardProps)
                 <DollarSign className="h-4 w-4 text-primary" /> Price Per Call
               </span>
               <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">
-                85% Creator Share
+                Service rate
               </span>
             </div>
 
@@ -80,7 +80,7 @@ export function OperatingRulesCard({ agentId, config }: OperatingRulesCardProps)
             </div>
 
             <p className="text-[11px] text-on-surface-variant mt-2">
-              Deducted per execution via credit pool or exact x402 micropayment.
+              Applied to a service request only after a verified payment policy is enabled.
             </p>
           </div>
 

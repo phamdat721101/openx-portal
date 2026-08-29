@@ -3,7 +3,6 @@
 import React, { createContext, useContext, useState } from 'react';
 import {
   StudioAgent,
-  AgentWalletData,
   SkillItem,
   CreditModelConfig,
   DreamCycleState,
@@ -11,7 +10,6 @@ import {
 } from './types';
 import {
   MOCK_AGENTS,
-  MOCK_WALLET_DATA,
   MOCK_SKILLS_DATA,
   MOCK_CREDIT_MODEL_DATA,
   DEFAULT_CREDIT_MODEL,
@@ -24,10 +22,19 @@ import {
   fetchRecentTelemetry,
   submitTelemetryEvent,
   IngestedTraceEvent,
+  AgentActivityProjection,
+  UsageSummary,
   fetchRegisteredAgents,
+  fetchAgentActivity,
+  fetchUsageSummaries,
   registerAgent as registerGatewayAgent,
   RegisterAgentInput,
   RegisteredAgentProjection,
+  linkDreamAgent,
+  setupDreamAgent,
+  triggerDreamRun,
+  fetchAgentSkills,
+  updateGatewaySkillStatus,
 } from './api/agentGateway';
 
 interface PortalContextType {
@@ -37,8 +44,6 @@ interface PortalContextType {
   logout: () => void;
   agents: StudioAgent[];
   getAgentById: (id: string) => StudioAgent | undefined;
-  getWalletData: (agentId: string) => AgentWalletData;
-  withdrawFunds: (agentId: string, amount: number) => Promise<{ success: boolean; txHash: string }>;
   getSkills: (agentId: string) => SkillItem[];
   addSkill: (agentId: string, skill: Omit<SkillItem, 'id' | 'created_at'>) => void;
   updateSkillStatus: (agentId: string, skillId: string, status: SkillStatus) => void;
@@ -46,6 +51,8 @@ interface PortalContextType {
   updateCreditModel: (agentId: string, config: Partial<CreditModelConfig>) => void;
   getDreamCycleState: (agentId: string) => DreamCycleState;
   linkDreamCycle: (agentId: string, hypermoveAgentId: string) => Promise<{ success: boolean; error?: string }>;
+  setupDreamCycle: (agentId: string) => Promise<{ success: boolean; error?: string }>;
+  triggerDreamCycle: (agentId: string) => Promise<{ success: boolean; error?: string; paymentRequired?: boolean; runId?: string; run?: import('./api/agentGateway').DreamTriggerResponse['run'] }>;
   flagSupplierCandidate: (agentId: string, skillId: string) => void;
   notification: { message: string; type: 'success' | 'error' | 'info' } | null;
   clearNotification: () => void;
@@ -56,18 +63,50 @@ interface PortalContextType {
   gatewayOnline: boolean;
   telemetryEvents: IngestedTraceEvent[];
   isLiveByAgent: Record<string, boolean>;
+  agentActivity: Record<string, AgentActivityProjection>;
+  usageSummaries: UsageSummary[];
   sendTestTelemetry: (agentId?: string) => Promise<void>;
   registerAgent: (input: RegisterAgentInput) => Promise<{ ok: boolean; agentId?: string; agentKey?: string; error?: string }>;
 }
 
+const GATEWAY_URL =
+  process.env.NEXT_PUBLIC_OPENX_GATEWAY_URL || 'http://localhost:7411';
+
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
+
+const DEFAULT_DREAM_CYCLE_STATE: DreamCycleState = {
+  is_linked: false,
+  hypermove_dream_agent_id: null,
+  rem_state: 'IDLE',
+  last_cycle_at: '',
+  cycle_count_total: 0,
+  memory_nodes_total: 0,
+  wake_context: {
+    active_memory_buffer_mb: 0,
+    long_term_embeddings: 0,
+    last_morning_brief_summary: 'Link a Dream agent to view live wake intelligence.',
+  },
+  learning_queue: [],
+  diagnostics: [],
+  skillify_candidates: [],
+};
+
+function normalizeDreamCycleState(state?: Partial<DreamCycleState>): DreamCycleState {
+  return {
+    ...DEFAULT_DREAM_CYCLE_STATE,
+    ...state,
+    wake_context: { ...DEFAULT_DREAM_CYCLE_STATE.wake_context, ...state?.wake_context },
+    learning_queue: state?.learning_queue ?? [],
+    diagnostics: state?.diagnostics ?? [],
+    skillify_candidates: state?.skillify_candidates ?? [],
+  };
+}
 
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [authenticated, setAuthenticated] = useState<boolean>(true);
   const [activeWallet, setActiveWallet] = useState<string>(MOCK_OWNER_ADDRESS);
   const [agents, setAgents] = useState<StudioAgent[]>(MOCK_AGENTS);
-  const [walletData, setWalletData] = useState<Record<string, AgentWalletData>>(MOCK_WALLET_DATA);
   const [skillsData, setSkillsData] = useState<Record<string, SkillItem[]>>(MOCK_SKILLS_DATA);
   const [creditModelData, setCreditModelData] = useState<Record<string, CreditModelConfig>>(MOCK_CREDIT_MODEL_DATA);
   const [dreamCycleData, setDreamCycleData] = useState<Record<string, DreamCycleState>>(MOCK_DREAM_CYCLE_DATA);
@@ -76,15 +115,16 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [gatewayOnline, setGatewayOnline] = useState<boolean>(false);
   const [telemetryEvents, setTelemetryEvents] = useState<IngestedTraceEvent[]>([]);
   const [isLiveByAgent, setIsLiveByAgent] = useState<Record<string, boolean>>({});
+  const [agentActivity, setAgentActivity] = useState<Record<string, AgentActivityProjection>>({});
+  const [usageSummaries, setUsageSummaries] = useState<UsageSummary[]>([]);
 
   const projectGatewayAgent = (agent: RegisteredAgentProjection): StudioAgent => ({
     id: agent.agent_id,
     slug: agent.slug,
     display_name: agent.display_name,
-    description: agent.description || 'Connected local agent. Financial and reputation data are unavailable.',
+    description: agent.description || 'Connected local agent. Live operational data appears when it syncs.',
     training_stage: 0,
     owner_address: agent.owner_address || 'Unverified owner',
-    kpis: { revenue_usdc_mtd: 0, hires_mtd: 0, reputation_score: 0, credits_earned_usdc_mtd: 0 },
     pending_actions: { dream_diffs_pending: 0, federation_broadcasts_pending: 0 },
     created_at: agent.registered_at,
     connection_state: agent.state,
@@ -141,8 +181,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       if (isMounted && traces.length > 0) {
         setTelemetryEvents(traces);
       }
-
       const registered = await fetchRegisteredAgents();
+      const skillEntries = await Promise.all(registered.map(async (agent) => [agent.agent_id, await fetchAgentSkills(agent.agent_id)] as const));
+      if (isMounted) {
+        setSkillsData((previous) => {
+          const next = { ...previous };
+          for (const [agentId, skills] of skillEntries) if (skills !== null) next[agentId] = skills;
+          return next;
+        });
+      }
+      const activity = await fetchAgentActivity();
+      if (isMounted) setAgentActivity(Object.fromEntries(activity.map((item) => [item.agent_id, item])));
+      const usage = await fetchUsageSummaries();
+      if (isMounted) setUsageSummaries(usage);
       // seam:portal-projection
       const agentsForSync = registered.length > 0
         ? [...MOCK_AGENTS.filter((agent) => !registered.some((record) => record.agent_id === agent.id)), ...registered.map(projectGatewayAgent)]
@@ -167,7 +218,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
               setDreamCycleData((prev) => ({
                 ...prev,
                 [agent.id]: {
-                  ...(prev[agent.id] || MOCK_DREAM_CYCLE_DATA[agent.id]),
+                  ...normalizeDreamCycleState(prev[agent.id] || MOCK_DREAM_CYCLE_DATA[agent.id]),
                   brain_snapshot: {
                     episodes: live.memory!.episodes,
                     facts: live.memory!.facts,
@@ -179,20 +230,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
               }));
             }
 
-            // Live withdrawable balance
-            if (live.credits && live.credits.balance_usdc) {
-              const balanceNum = parseFloat(live.credits.balance_usdc);
-              if (!isNaN(balanceNum) && balanceNum > 0) {
-                setWalletData((prev) => ({
-                  ...prev,
-                  [agent.id]: {
-                    ...(prev[agent.id] || MOCK_WALLET_DATA[agent.id]),
-                    total_withdrawable_usdc: balanceNum,
-                  },
-                }));
-              }
-            }
           }
+
+          // 4. Sync Dream Cycle link and active run state
+          try {
+            const dreamRes = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agent.id)}/dream`).then(r => r.json()).catch(() => null);
+            if (dreamRes && dreamRes.ok && dreamRes.link && isMounted) {
+              setDreamCycleData((prev) => ({
+                ...prev,
+                [agent.id]: {
+                  ...normalizeDreamCycleState(prev[agent.id]),
+                  is_linked: true,
+                  hypermove_dream_agent_id: dreamRes.link.hypermove_agent_id,
+                  rem_state: dreamRes.latest_run?.status === 'running' ? 'CONSOLIDATING' : 'IDLE',
+                },
+              }));
+            }
+          } catch (_) {}
         } catch (_) {}
       }
     }
@@ -214,8 +268,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       tools_used: ['google-workspace-cli.sheets.read'],
       latency_ms: Math.floor(Math.random() * 400) + 300,
       status: 'success',
-      cost_usdc: '0.012',
-      summary: 'Manual heartbeat test event sent from Connect Console',
+      summary: 'Manual heartbeat test event sent from Studio Hub',
     });
 
     if (res.ok) {
@@ -262,62 +315,6 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     return agents.find((a) => a.id === id || a.slug === id);
   };
 
-  const getWalletData = (agentId: string): AgentWalletData => {
-    return (
-      walletData[agentId] || {
-        total_withdrawable_usdc: 0,
-        breakdown: { credit_share_usdc: 0, x402_direct_usdc: 0, sub_agent_earnings_usdc: 0 },
-        withdraw_threshold_usdc: 5.0,
-        withdraw_cooldown_active: false,
-        last_withdraw_at: null,
-        ledger: [],
-      }
-    );
-  };
-
-  const withdrawFunds = async (agentId: string, amount: number) => {
-    const current = getWalletData(agentId);
-    if (amount > current.total_withdrawable_usdc) {
-      showToast('Requested amount exceeds available balance', 'error');
-      return { success: false, txHash: '' };
-    }
-    if (current.total_withdrawable_usdc < current.withdraw_threshold_usdc) {
-      showToast(`Minimum withdrawal threshold is $${current.withdraw_threshold_usdc.toFixed(2)} USDC`, 'error');
-      return { success: false, txHash: '' };
-    }
-
-    const txHash = '0x' + Math.random().toString(16).substring(2, 10) + '...' + Math.random().toString(16).substring(2, 6);
-    
-    setWalletData((prev) => {
-      const existing = prev[agentId] || MOCK_WALLET_DATA[agentId];
-      return {
-        ...prev,
-        [agentId]: {
-          ...existing,
-          total_withdrawable_usdc: Math.max(0, existing.total_withdrawable_usdc - amount),
-          last_withdraw_at: new Date().toISOString(),
-          ledger: [
-            {
-              id: 'tx_with_' + Date.now(),
-              timestamp: new Date().toISOString(),
-              method: 'exact',
-              caller_address: activeWallet,
-              amount_usdc: amount,
-              network: 'XRPL Testnet (RLUSD)',
-              tx_hash: txHash,
-              status: 'settled',
-              description: 'Wallet balance withdrawal to creator account',
-            },
-            ...existing.ledger,
-          ],
-        },
-      };
-    });
-
-    showToast(`Successfully initiated withdrawal of $${amount.toFixed(2)} RLUSD`, 'success');
-    return { success: true, txHash };
-  };
-
   const getSkills = (agentId: string): SkillItem[] => {
     return skillsData[agentId] || [];
   };
@@ -338,6 +335,17 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateSkillStatus = (agentId: string, skillId: string, status: SkillStatus) => {
+    const isLive = agents.some((agent) => agent.id === agentId && !agent.is_demo);
+    if (isLive) {
+      const agentKey = window.prompt('Enter this agent’s one-time key to update the skill lifecycle. The key is not stored.');
+      if (!agentKey) return;
+      void updateGatewaySkillStatus(agentId, skillId, status, agentKey).then((result) => {
+        if (!result.ok) { showToast(result.error || 'Unable to update skill status', 'error'); return; }
+        setSkillsData((previous) => ({ ...previous, [agentId]: (previous[agentId] || []).map((skill) => skill.id === skillId ? { ...skill, status } : skill) }));
+        showToast(`Updated skill status to ${status.toUpperCase()}`, 'info');
+      });
+      return;
+    }
     setSkillsData((prev) => {
       const current = prev[agentId] || [];
       return {
@@ -366,7 +374,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const getDreamCycleState = (agentId: string): DreamCycleState => {
-    return dreamCycleData[agentId] || MOCK_DREAM_CYCLE_DATA['openx-defi-analyst-01'];
+    return normalizeDreamCycleState(dreamCycleData[agentId]);
   };
 
   const linkDreamCycle = async (agentId: string, hypermoveAgentId: string) => {
@@ -374,12 +382,32 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       return { success: false, error: 'HyperMove Agent ID cannot be empty' };
     }
 
-    return { success: false, error: 'Dream Cycle verification is not configured on the Gateway yet.' };
+    const response = await linkDreamAgent(agentId, hypermoveAgentId);
+    if (!response.ok || !response.link) return { success: false, error: response.message || response.error || 'Dream Cycle verification failed.' };
+    setDreamCycleData((previous) => ({ ...previous, [agentId]: { ...getDreamCycleState(agentId), is_linked: true, hypermove_dream_agent_id: response.link!.hypermove_agent_id } }));
+    showToast('Dream agent ownership verified and linked.', 'success');
+    return { success: true };
+  };
+
+  const setupDreamCycle = async (agentId: string) => {
+    const response = await setupDreamAgent(agentId);
+    if (!response.ok || !response.link) return { success: false, error: response.message || response.error || 'Dream setup failed.' };
+    setDreamCycleData((previous) => ({ ...previous, [agentId]: { ...getDreamCycleState(agentId), is_linked: true, hypermove_dream_agent_id: response.link!.hypermove_agent_id } }));
+    showToast('Dream Cycle is ready. New Gateway telemetry is automatically submitted as Dream episodes.', 'success');
+    return { success: true };
+  };
+
+  const triggerDreamCycle = async (agentId: string) => {
+    const response = await triggerDreamRun(agentId);
+    if (!response.ok) return { success: false, paymentRequired: response.error === 'payment_required', error: response.message || response.error || 'Unable to start Dream Cycle.' };
+    setDreamCycleData((previous) => ({ ...previous, [agentId]: { ...getDreamCycleState(agentId), rem_state: 'CONSOLIDATING', last_cycle_at: new Date().toISOString() } }));
+    showToast('Dream Cycle submitted. Refresh wake intelligence when it completes.', 'success');
+    return { success: true, runId: response.run?.id, run: response.run };
   };
 
   const flagSupplierCandidate = (agentId: string, skillId: string) => {
     setDreamCycleData((prev) => {
-      const current = prev[agentId] || MOCK_DREAM_CYCLE_DATA[agentId];
+      const current = normalizeDreamCycleState(prev[agentId] || MOCK_DREAM_CYCLE_DATA[agentId]);
       return {
         ...prev,
         [agentId]: {
@@ -403,8 +431,6 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         logout,
         agents,
         getAgentById,
-        getWalletData,
-        withdrawFunds,
         getSkills,
         addSkill,
         updateSkillStatus,
@@ -412,6 +438,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         updateCreditModel,
         getDreamCycleState,
         linkDreamCycle,
+        setupDreamCycle,
+        triggerDreamCycle,
         flagSupplierCandidate,
         notification,
         clearNotification,
@@ -421,6 +449,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         gatewayOnline,
         telemetryEvents,
         isLiveByAgent,
+        agentActivity,
+        usageSummaries,
         sendTestTelemetry,
         registerAgent,
       }}

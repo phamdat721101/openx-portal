@@ -5,6 +5,7 @@ agent/**/__pycache__/
 gateway/node_modules/
 gateway/dist/
 gateway/.env
+.openx/
 
 GOOGLE_TECH_STACK_SETUP.md
 .nim/*
@@ -13,3 +14,11 @@ docs/*
 
 portal/.next/*
 portal/node_modules/*
+.gstack/
+
+# Local/generated workspace artifacts
+.DS_Store
+portal/test-results/
+portal/tsconfig.tsbuildinfo
+gateway/.nim/
+gateway/docs/state/

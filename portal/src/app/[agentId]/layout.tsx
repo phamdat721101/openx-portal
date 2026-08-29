@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { usePortal } from '@/lib/portalContext';
 import { TrainingStagePill } from '@/components/common/StatusBadge';
-import { ArrowLeft, Wallet, Wrench, Sliders, Moon, Bot, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Wrench, Sliders, Moon, Bot, ShieldCheck } from 'lucide-react';
 
 interface AgentLayoutProps {
   params: { agentId: string };
@@ -20,10 +20,10 @@ export default function AgentLayout({ params, children }: AgentLayoutProps) {
   const base = `/${params.agentId}`;
 
   const tabs = [
-    { slug: 'wallet', label: 'Wallet & Ledger', icon: Wallet },
     { slug: 'skills', label: 'Skills & Tools', icon: Wrench },
     { slug: 'credit-model', label: 'Credit Model & Pricing', icon: Sliders },
     { slug: 'dream-cycle', label: 'Dream Cycle Bridge', icon: Moon },
+    { slug: 'auditor', label: 'Wallet & Auditor', icon: ShieldCheck },
   ];
 
   if (!agent) {

@@ -27,27 +27,27 @@ describe('Gateway Core Backend Server (PRD 001 Tests)', () => {
       expect(res.body).toEqual({
         ok: false,
         error: 'invalid_fields',
-        message: 'fields must be a comma-separated subset of: info,status,model,credits,memory',
+        message: 'fields must be a comma-separated subset of: info,status,model,memory',
       });
     });
 
-    it('returns 200 with all 5 sections when valid agentId is provided', async () => {
+    it('returns 200 with operational sections and no financial status data when valid agentId is provided', async () => {
       const res = await request(app).get('/v1/agent/status?agentId=3fa85f64-5717-4562-b3fc-2c963f66afa6');
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(res.body.agent_id).toBe('3fa85f64-5717-4562-b3fc-2c963f66afa6');
       expect(res.body.requested_at).toBeDefined();
 
-      // Check all 5 sections
+      // Check operational sections; financial/account state is intentionally absent.
       expect(res.body.info).toBeDefined();
       expect(res.body.status).toBeDefined();
       expect(res.body.model).toBeDefined();
-      expect(res.body.credits).toBeDefined();
       expect(res.body.memory).toBeDefined();
+      expect(res.body.credits).toBeUndefined();
+      expect(JSON.stringify(res.body)).not.toMatch(/balance|earning|withdraw|reputation/i);
 
       // Check honest degradation reasons when no upstream or auth provided
       expect(res.body.info.erc8004.reason).toBe('no_header');
-      expect(res.body.credits.reason).toBe('auth_required');
       expect(res.body.status.reachable).toBe(true);
     });
 

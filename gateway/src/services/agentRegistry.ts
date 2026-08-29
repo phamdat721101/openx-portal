@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { gatewayDatabase } from '../db/database.js';
 
 export type AgentHostType = 'kiro-cli' | 'claude-code' | 'adk-python' | 'custom';
 export type RegistrationSource = 'explicit' | 'auto_discovered';
@@ -21,6 +22,7 @@ export interface AgentRegistrationInput {
   capabilities?: string[];
   host_type: AgentHostType;
   owner_address?: string;
+  wallet_address?: string;
 }
 
 export interface RegisteredAgent {
@@ -32,6 +34,7 @@ export interface RegisteredAgent {
   capabilities: string[];
   host_type: AgentHostType;
   owner_address: string | null;
+  wallet_address: string | null;
   owner_verified: boolean;
   registration_source: RegistrationSource;
   state: ConnectionState;
@@ -110,6 +113,7 @@ export class AgentRegistry {
       capabilities: input.capabilities || [],
       host_type: input.host_type,
       owner_address: input.owner_address || null,
+      wallet_address: input.wallet_address || input.owner_address || null,
       owner_verified: false,
       registration_source: 'explicit',
       state: 'registered',
@@ -145,7 +149,8 @@ export class AgentRegistry {
   }
 
   public authorizeTelemetry(agentId: string, credential?: string): boolean {
-    if (this.mode !== 'production') return true;
+    const production = this.mode === 'production' || process.env.OPENX_AGENT_REGISTRATION_MODE === 'production';
+    if (!production) return true;
     const agent = this.records.get(agentId);
     return Boolean(agent && credential && verifyCredential(credential, agent.credential_hash));
   }
@@ -163,7 +168,7 @@ export class AgentRegistry {
   }
 
   public health() {
-    return { registry_persistence: this.registryPath ? (this.loadError ? 'error' : 'enabled') : 'disabled', registry_error: this.loadError };
+    return { registry_persistence: this.loadError ? 'error' : 'enabled', registry_error: this.loadError, ...gatewayDatabase.health() };
   }
 
   public clear(): void {
@@ -182,6 +187,7 @@ export class AgentRegistry {
       capabilities: metadata.capabilities || [],
       host_type: 'custom',
       owner_address: null,
+      wallet_address: null,
       owner_verified: false,
       registration_source: 'auto_discovered',
       state: 'auto_discovered',
@@ -211,6 +217,7 @@ export class AgentRegistry {
     agent.capabilities = input.capabilities || [];
     agent.host_type = input.host_type;
     agent.owner_address = input.owner_address || null;
+    agent.wallet_address = input.wallet_address || input.owner_address || null;
     if (input.slug) agent.slug = this.uniqueSlug(input.slug, agent.agent_id);
   }
 
@@ -229,7 +236,11 @@ export class AgentRegistry {
   }
 
   private load(): void {
-    if (!this.registryPath || !existsSync(this.registryPath)) return;
+    if (!this.registryPath) {
+      gatewayDatabase.read<RegisteredAgent[]>('agent_registry', []).forEach((record) => this.records.set(record.agent_id, record));
+      return;
+    }
+    if (!existsSync(this.registryPath)) return;
     try {
       const parsed = JSON.parse(readFileSync(this.registryPath, 'utf8')) as RegisteredAgent[];
       if (!Array.isArray(parsed)) throw new Error('registry file must contain an array');
@@ -240,7 +251,7 @@ export class AgentRegistry {
   }
 
   private persist(): void {
-    if (!this.registryPath) return;
+    if (!this.registryPath) { gatewayDatabase.write('agent_registry', Array.from(this.records.values())); return; }
     mkdirSync(dirname(this.registryPath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.registryPath}.tmp`;
     writeFileSync(temporaryPath, JSON.stringify(Array.from(this.records.values()), null, 2), { encoding: 'utf8', mode: 0o600 });

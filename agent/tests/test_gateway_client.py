@@ -10,6 +10,8 @@ from gateway_client import (
     get_agent_status,
     register_agent,
     submit_telemetry,
+    submit_usage_event,
+    sync_agent,
     submit_memory_episode,
     submit_candidate_skill,
     request_gated_feed,
@@ -59,7 +61,7 @@ class TestGatewayClient(unittest.TestCase):
         }
         mock_response = io.BytesIO(json.dumps(mock_payload).encode("utf-8"))
 
-        with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
             res = submit_telemetry(
                 agent_id="test-agent-id",
                 task_id="task-001",
@@ -70,6 +72,13 @@ class TestGatewayClient(unittest.TestCase):
             self.assertTrue(res["ok"])
             self.assertEqual(res["id"], "tel_12345")
             mock_urlopen.assert_called_once()
+
+    def test_usage_and_sync_use_agent_key(self):
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+            self.assertTrue(submit_usage_event("event-1", "test-agent", "2026-08-26T12:00:00.000Z", tool_calls=[{"tool_id": "tool", "calls": 1, "outcome": "success"}])["ok"])
+            self.assertTrue(sync_agent("test-agent", tools=["tool"], skills=["skill"])["ok"])
+            self.assertEqual(mock_urlopen.call_count, 2)
 
     def test_submit_memory_episode_success(self):
         mock_payload = {
@@ -115,6 +124,47 @@ class TestGatewayClient(unittest.TestCase):
     def test_request_gated_feed_raises_not_implemented(self):
         with self.assertRaises(NotImplementedError):
             request_gated_feed("feed-123")
+
+
+    def test_transient_http_error_retries_with_exponential_backoff(self):
+        import urllib.error
+        import time
+
+        mock_response = io.BytesIO(b'{"ok": true}')
+        error = urllib.error.HTTPError("http://gateway", 503, "busy", {}, io.BytesIO(b""))
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key", "OPENX_SYNC_MAX_ATTEMPTS": "3", "OPENX_SYNC_BACKOFF_SECONDS": "0.25"}), \
+             patch("urllib.request.urlopen", side_effect=[error, error, mock_response]) as mock_urlopen, \
+             patch.object(time, "sleep") as mock_sleep:
+            result = sync_agent("test-agent", tools=["tool"], skills=["skill"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_urlopen.call_count, 3)
+        self.assertEqual([call.args[0] for call in mock_sleep.call_args_list], [0.25, 0.5])
+
+    def test_client_error_does_not_retry(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError("http://gateway", 401, "unauthorized", {}, io.BytesIO(b'{"error":"invalid_agent_key"}'))
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen", side_effect=error) as mock_urlopen:
+            result = sync_agent("test-agent")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertEqual(result["error"], "sync_failed")
+
+    def test_usage_payload_contains_no_financial_fields_or_estimated_tokens(self):
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+            result = submit_usage_event(
+                "event-actual-only", "test-agent", "2026-08-26T12:00:00.000Z",
+                tool_calls=[{"tool_id": "tool", "calls": 1, "outcome": "success"}],
+            )
+
+        self.assertTrue(result["ok"])
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertNotIn("cost_usdc", payload)
+        self.assertEqual(payload["model_usage"], [])
+        self.assertEqual(payload["nim_savings"], [])
 
 
 if __name__ == "__main__":
