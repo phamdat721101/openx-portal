@@ -14,6 +14,7 @@ docs/*
 
 portal/.next/*
 portal/node_modules/*
+portal/.env*.local
 .gstack/
 
 # Local/generated workspace artifacts
