@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { BookOpen, Terminal, Cpu, Database, ShieldCheck, Zap, Copy, Check, ArrowRight, ExternalLink } from 'lucide-react';
 import { MatrixChip } from '@/components/common/StatusBadge';
+import { buildAgentConnectionPrompt, getAgentConnectionEnvironment } from '@/lib/agentConnectionPrompt';
 
 export default function DocsPage() {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
@@ -15,6 +16,8 @@ export default function DocsPage() {
   };
 
   const curlStatus = `curl -s "http://localhost:7411/v1/agent/status?agentId=3fa85f64-5717-4562-b3fc-2c963f66afa6" | jq .`;
+  const connectionEnvironment = getAgentConnectionEnvironment();
+  const connectionPrompt = buildAgentConnectionPrompt();
 
   const curlTelemetry = `curl -X POST "http://localhost:7411/v1/agent/telemetry" \\
   -H "Content-Type: application/json" \\
@@ -26,8 +29,6 @@ export default function DocsPage() {
     "latency_ms": 580,
     "status": "success"
   }'`;
-  const usagePrompt = 'For every task, emit a usage event for each model request, tool/skill call, and nim-skill operation. Send token counts and billable units, never raw prompts or arguments. Report baseline and actual tokens only when measured.';
-
   const pythonSnippet = `from gateway_client import get_agent_status, submit_telemetry
 
 # 1. Pre-flight self-introspection
@@ -74,7 +75,8 @@ submit_telemetry(
       </div>
 
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-        <div className="flex items-center justify-between gap-3"><div><h2 className="font-headline text-sm font-bold text-on-surface">Usage Accounting Agent Instruction</h2><p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{usagePrompt}</p></div><button onClick={() => copyToClipboard(usagePrompt, 'usage-prompt')} className="shrink-0 text-xs text-primary">{copiedSection === 'usage-prompt' ? 'Copied' : 'Copy prompt'}</button></div>
+        <div className="flex items-center justify-between gap-3"><div><h2 className="font-headline text-sm font-bold text-on-surface">Agent Connection Prompt</h2><p className="mt-1 text-xs leading-relaxed text-on-surface-variant">Copy this reusable, secret-free instruction for an agent. It is configured for <strong>{connectionEnvironment.label}</strong> at <code>{connectionEnvironment.gatewayUrl}</code>.</p></div><button onClick={() => copyToClipboard(connectionPrompt, 'connection-prompt')} className="shrink-0 text-xs text-primary">{copiedSection === 'connection-prompt' ? 'Copied' : 'Copy prompt'}</button></div>
+        <pre className="mt-4 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-surface-container-lowest p-4 font-mono text-[11px] text-on-surface border border-outline-variant/20">{connectionPrompt}</pre>
       </div>
 
       {/* Grid Overview Cards */}

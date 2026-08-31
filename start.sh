@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# start.sh — OpenX Deep Research Analyst (Unified Dev Runner)
+# start.sh — OpenX Deep Research Analyst (Unified Application Runner)
 #
-# Starts both Backend Gateway (:7411) and Frontend Portal (:3010) concurrently
-# with clean process management and pre-flight dependency checks.
+# Builds and starts the Gateway (:7411) and Portal (:3010) in production mode,
+# so the Portal is ready to serve without compiling routes on first use.
 # ==============================================================================
 
 # ANSI Color Codes
@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${CYAN}================================================================${NC}"
-echo -e "${CYAN}   OpenX Deep Research Analyst — Development Environment   ${NC}"
+echo -e "${CYAN}   OpenX Deep Research Analyst — Application Environment   ${NC}"
 echo -e "${CYAN}================================================================${NC}"
 
 # 1. Pre-flight Node.js check
@@ -44,12 +44,24 @@ if [ ! -d "$ROOT_DIR/portal/node_modules" ]; then
     (cd "$ROOT_DIR/portal" && npm install)
 fi
 
-# 3. Clean up any stale processes occupying ports 7411 or 3010
+# 3. Build both services before replacing the running application.
+echo -e "${CYAN}[*] Building Gateway and Portal for immediate serving...${NC}"
+if ! (cd "$ROOT_DIR/gateway" && npm run build); then
+    echo -e "${RED}[ERROR] Gateway build failed. Existing services were left untouched.${NC}"
+    exit 1
+fi
+
+if ! (cd "$ROOT_DIR/portal" && npm run build); then
+    echo -e "${RED}[ERROR] Portal build failed. Existing services were left untouched.${NC}"
+    exit 1
+fi
+
+# 4. Clean up any stale processes occupying ports 7411 or 3010
 echo -e "${CYAN}[*] Clearing any stale processes on ports 7411 and 3010...${NC}"
 lsof -ti:7411 | xargs kill -9 2>/dev/null || true
 lsof -ti:3010 | xargs kill -9 2>/dev/null || true
 
-# 4. Graceful shutdown handler (on Ctrl+C / SIGTERM)
+# 5. Graceful shutdown handler (on Ctrl+C / SIGTERM)
 PIDS=()
 
 cleanup() {
@@ -66,22 +78,22 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# 5. Start Gateway Backend Service (:7411)
-echo -e "${VIOLET}[BE] Starting Gateway sidecar on http://localhost:7411...${NC}"
+# 6. Start Gateway Backend Service (:7411)
+echo -e "${VIOLET}[BE] Starting built Gateway sidecar on http://localhost:7411...${NC}"
 (
     cd "$ROOT_DIR/gateway"
-    npm run dev
+    npm run start
 ) &
 PIDS+=($!)
 
 # Brief pause
 sleep 1.5
 
-# 6. Start Portal Frontend (:3010)
-echo -e "${CYAN}[FE] Starting Agent Portal on http://localhost:3010...${NC}"
+# 7. Start Portal Frontend (:3010)
+echo -e "${CYAN}[FE] Starting built Agent Portal on http://localhost:3010...${NC}"
 (
     cd "$ROOT_DIR/portal"
-    npm run dev
+    npm run start
 ) &
 PIDS+=($!)
 

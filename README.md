@@ -43,9 +43,12 @@ cd agent && python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python3 main.py   # runs the ADK orchestration loop stub
 
-# gateway/ (Node, separate terminal)
+# build and start the Gateway and Portal together (recommended for in-app use)
+./start.sh         # builds first, then serves Gateway :7411 and Portal :3010
+
+# gateway development mode (separate terminal, with watch reload)
 cd gateway && npm install
-npm run dev        # starts the local MCP-sidecar stub on :7411
+npm run dev
 ```
 
 ## Cross-references

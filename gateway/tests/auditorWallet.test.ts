@@ -18,6 +18,15 @@ describe('wallet and advisory auditor APIs', () => {
     expect(registration.status).toBe(201);
     const agentId = registration.body.agent.agent_id as string;
 
+    const initialWorkspace = await request(app).get(`/v1/agents/${agentId}/audits`);
+    expect(initialWorkspace.status).toBe(200);
+    expect(initialWorkspace.body.dream_jobs).toEqual(expect.arrayContaining([expect.objectContaining({ dream_run_id: `agent:${agentId}`, status: 'not_configured' })]));
+    const workspaceJob = initialWorkspace.body.dream_jobs.find((job: { dream_run_id: string }) => job.dream_run_id === `agent:${agentId}`);
+    const fallbackChat = await request(app).post(`/v1/agents/${agentId}/audits/${workspaceJob.id}/chat`).send({ message: 'What activity is available?', client_request_id: 'agent-workspace-fallback' });
+    expect(fallbackChat.status).toBe(201);
+    expect(fallbackChat.body.turn).toMatchObject({ role: 'auditor', confidence: 'low' });
+    expect(fallbackChat.body.turn.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'context', id: 'agent-summary' })]));
+
     const wallet = await request(app).get(`/v1/agents/${agentId}/wallet`);
     expect(wallet.status).toBe(200);
     expect(wallet.body.wallet).toMatchObject({ address: null, chain_id: 49986, network: 'Status Network Testnet' });

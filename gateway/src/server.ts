@@ -284,6 +284,7 @@ app.post('/v1/agent/register', (req: Request, res: Response): void => {
   try {
     const credential = req.headers['x-agent-key'];
     const result = agentRegistry.register(parsed.data, typeof credential === 'string' ? credential : undefined);
+    auditorService.ensureAgentWorkspace(result.agent.agent_id);
     res.status(result.created ? 201 : 200).json({
       ok: true,
       status: 'registered',
@@ -319,6 +320,23 @@ app.get('/v1/agents/activity', (_req: Request, res: Response): void => {
       activity: agentIngestionStore.getTaskActivity(agent.agent_id),
     })),
   });
+});
+
+/** Single truthful projection for the Studio Hub; keep before /:agentId routes. */
+app.get('/v1/agents/overview', (_req: Request, res: Response): void => {
+  const agents = agentRegistry.list();
+  const overview = agents.map((agent) => {
+    const link = dreamState.getLink(agent.agent_id);
+    const jobs = auditorService.listDreamJobs(agent.agent_id);
+    return {
+      agent,
+      connection: { state: agent.state, last_seen_at: agent.last_seen_at },
+      dream: { linked: Boolean(link), hypermove_agent_id: link?.hypermove_agent_id || null },
+      activity: agentIngestionStore.getTaskActivity(agent.agent_id),
+      audit: { ready: jobs.some((job) => job.dream_run_id === `agent:${agent.agent_id}`), job_count: jobs.length },
+    };
+  });
+  res.json({ ok: true, agents: overview, summary: { registered: overview.length, online: overview.filter((item) => item.connection.state === 'online').length, linked: overview.filter((item) => item.dream.linked).length, auditor_ready: overview.filter((item) => item.audit.ready).length } });
 });
 
 /** Agent-owned periodic sync. No gateway-initiated connection to agent hosts. */
@@ -379,6 +397,7 @@ app.get('/v1/agents/:agentId/wallet', async (req: Request, res: Response): Promi
 
 app.get('/v1/agents/:agentId/audits', (req: Request, res: Response): void => {
   if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  auditorService.ensureAgentWorkspace(req.params.agentId);
   res.json({ ok: true, audits: auditorService.list(req.params.agentId, Number(req.query.limit) || 20), dream_jobs: auditorService.listDreamJobs(req.params.agentId) });
 });
 

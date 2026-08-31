@@ -26,6 +26,7 @@ import {
   fetchRegisteredAgents,
   fetchAgentActivity,
   fetchUsageSummaries,
+  fetchFleetOverview,
   registerAgent as registerGatewayAgent,
   RegisterAgentInput,
   RegisteredAgentProjection,
@@ -111,7 +112,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [agentActivity, setAgentActivity] = useState<Record<string, AgentActivityProjection>>({});
   const [usageSummaries, setUsageSummaries] = useState<UsageSummary[]>([]);
 
-  const projectGatewayAgent = (agent: RegisteredAgentProjection): StudioAgent => ({
+  const projectGatewayAgent = (agent: RegisteredAgentProjection, dreamLink?: string | null): StudioAgent => ({
     id: agent.agent_id,
     slug: agent.slug,
     display_name: agent.display_name,
@@ -125,6 +126,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     last_seen_at: agent.last_seen_at,
     owner_verified: agent.owner_verified,
     is_demo: false,
+    hypermove_dream_agent_id: dreamLink || null,
   });
 
   // Theme synchronization
@@ -174,7 +176,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       if (isMounted && traces.length > 0) {
         setTelemetryEvents(traces);
       }
-      const registered = await fetchRegisteredAgents();
+      const overview = await fetchFleetOverview();
+      const registered = overview ? overview.agents.map((item) => item.agent) : await fetchRegisteredAgents();
+      const dreamLinks = new Map((overview?.agents || []).map((item) => [item.agent.agent_id, item.dream.hypermove_agent_id]));
       const skillEntries = await Promise.all(registered.map(async (agent) => [agent.agent_id, await fetchAgentSkills(agent.agent_id)] as const));
       if (isMounted) {
         setSkillsData((previous) => {
@@ -183,19 +187,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           return next;
         });
       }
-      const activity = await fetchAgentActivity();
+      const activity = overview ? overview.agents.map((item) => ({ agent_id: item.agent.agent_id, state: item.connection.state, last_seen_at: item.connection.last_seen_at, activity: item.activity })) : await fetchAgentActivity();
       if (isMounted) setAgentActivity(Object.fromEntries(activity.map((item) => [item.agent_id, item])));
       const usage = await fetchUsageSummaries();
       if (isMounted) setUsageSummaries(usage);
       // seam:portal-projection
       const agentsForSync = registered.length > 0
-        ? [...MOCK_AGENTS.filter((agent) => !registered.some((record) => record.agent_id === agent.id)), ...registered.map(projectGatewayAgent)]
+        ? [...MOCK_AGENTS.filter((agent) => !registered.some((record) => record.agent_id === agent.id)), ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))]
         : MOCK_AGENTS;
       if (isMounted && registered.length > 0) {
         setAgents((previous) => {
           const gatewayIds = new Set(registered.map((agent) => agent.agent_id));
           const demos = previous.filter((agent) => !gatewayIds.has(agent.id));
-          return [...demos, ...registered.map(projectGatewayAgent)];
+          return [...demos, ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))];
         });
       }
 
@@ -229,6 +233,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           try {
             const dreamRes = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agent.id)}/dream`).then(r => r.json()).catch(() => null);
             if (dreamRes && dreamRes.ok && dreamRes.link && isMounted) {
+              setAgents((previous) => previous.map((entry) => entry.id === agent.id ? { ...entry, hypermove_dream_agent_id: dreamRes.link.hypermove_agent_id } : entry));
               setDreamCycleData((prev) => ({
                 ...prev,
                 [agent.id]: {
@@ -367,6 +372,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     const response = await linkDreamAgent(agentId, hypermoveAgentId);
     if (!response.ok || !response.link) return { success: false, error: response.message || response.error || 'Dream Cycle verification failed.' };
     setDreamCycleData((previous) => ({ ...previous, [agentId]: { ...getDreamCycleState(agentId), is_linked: true, hypermove_dream_agent_id: response.link!.hypermove_agent_id } }));
+    setAgents((previous) => previous.map((agent) => agent.id === agentId ? { ...agent, hypermove_dream_agent_id: response.link!.hypermove_agent_id } : agent));
     showToast('Dream agent ownership verified and linked.', 'success');
     return { success: true };
   };
@@ -375,6 +381,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     const response = await setupDreamAgent(agentId);
     if (!response.ok || !response.link) return { success: false, error: response.message || response.error || 'Dream setup failed.' };
     setDreamCycleData((previous) => ({ ...previous, [agentId]: { ...getDreamCycleState(agentId), is_linked: true, hypermove_dream_agent_id: response.link!.hypermove_agent_id } }));
+    setAgents((previous) => previous.map((agent) => agent.id === agentId ? { ...agent, hypermove_dream_agent_id: response.link!.hypermove_agent_id } : agent));
     showToast('Dream Cycle is ready. New Gateway telemetry is automatically submitted as Dream episodes.', 'success');
     return { success: true };
   };

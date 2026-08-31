@@ -23,6 +23,9 @@ describe('Agent registration to portal fleet E2E', () => {
 
     const fleet = await request(app).get('/v1/agents');
     expect(fleet.body.agents).toEqual(expect.arrayContaining([expect.objectContaining({ agent_id: agentId, state: 'online' })]));
+    const overview = await request(app).get('/v1/agents/overview');
+    expect(overview.status).toBe(200);
+    expect(overview.body.agents).toEqual(expect.arrayContaining([expect.objectContaining({ agent: expect.objectContaining({ agent_id: agentId }), connection: expect.objectContaining({ state: 'online' }), dream: { linked: false, hypermove_agent_id: null }, audit: expect.objectContaining({ ready: true }) })]));
   });
 
   it('allows public production registration while requiring the issued key for writes', async () => {

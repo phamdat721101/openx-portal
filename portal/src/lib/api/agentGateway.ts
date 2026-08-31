@@ -76,6 +76,14 @@ export interface AgentActivityProjection {
   last_seen_at: string | null;
   activity: { current_task: AgentTaskActivity | null; latest_task: AgentTaskActivity | null };
 }
+export interface FleetOverviewAgent {
+  agent: RegisteredAgentProjection;
+  connection: { state: RegisteredAgentProjection['state']; last_seen_at: string | null };
+  dream: { linked: boolean; hypermove_agent_id: string | null };
+  activity: AgentActivityProjection['activity'];
+  audit: { ready: boolean; job_count: number };
+}
+export interface FleetOverview { agents: FleetOverviewAgent[]; summary: { registered: number; online: number; linked: number; auditor_ready: number }; }
 
 export interface UsageSummary {
   agent_id: string;
@@ -286,6 +294,15 @@ export async function fetchAgentActivity(): Promise<AgentActivityProjection[]> {
   } catch {
     return [];
   }
+}
+
+export async function fetchFleetOverview(): Promise<FleetOverview | null> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/v1/agents/overview`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { agents: data.agents || [], summary: data.summary || { registered: 0, online: 0, linked: 0, auditor_ready: 0 } };
+  } catch { return null; }
 }
 
 export async function fetchWalletSnapshot(agentId: string): Promise<WalletSnapshot | null> {
