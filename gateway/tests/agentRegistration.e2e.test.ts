@@ -54,4 +54,21 @@ describe('Agent registration to portal fleet E2E', () => {
       else process.env.OPENX_API_BASE_URL = previousApiBaseUrl;
     }
   });
+
+  it('claims an existing identity with its original agent key without creating a duplicate', async () => {
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Recoverable Agent', host_type: 'custom' });
+    const agentId = registration.body.agent.agent_id as string;
+    const agentKey = registration.body.credential.agent_key as string;
+
+    const denied = await request(app).post('/v1/agent/claim').send({ agent_id: agentId, agent_key: 'invalid-agent-key-that-is-long-enough' });
+    expect(denied.status).toBe(401);
+
+    const claim = await request(app).post('/v1/agent/claim').send({ agent_id: agentId, agent_key: agentKey });
+    expect(claim.status).toBe(200);
+    expect(claim.body).toMatchObject({ ok: true, agent: { agent_id: agentId, state: 'registered' } });
+    expect(claim.body).not.toHaveProperty('credential');
+
+    const records = await request(app).get('/v1/agents');
+    expect(records.body.agents.filter((agent: { agent_id: string }) => agent.agent_id === agentId)).toHaveLength(1);
+  });
 });

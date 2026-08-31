@@ -134,6 +134,7 @@ export interface RegisterAgentInput {
   owner_address?: string;
   wallet_address?: string;
 }
+export interface ClaimAgentInput { agent_id: string; agent_key: string; }
 
 export interface WalletSnapshot { address: string | null; chain_id: number; network: string; native_balance_wei: string | null; tokens: Array<{ address: string; symbol: string; decimals: number; balance: string }>; activity: Array<{ hash: string; timestamp: string | null; from: string; to: string | null; value: string }>; fetched_at: string; source_errors: string[]; }
 export interface AuditRun { id: string; created_at: string; trigger: string; findings: Array<{ id: string; dimension: string; verdict: string; title: string; evidence: string[] }> }
@@ -335,6 +336,16 @@ export async function registerAgent(input: RegisterAgentInput): Promise<{ ok: bo
   } catch (error: any) {
     return { ok: false, error: error.message || 'Gateway unavailable' };
   }
+}
+
+export async function claimAgent(input: ClaimAgentInput): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; error?: string }> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/v1/agent/claim`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(input),
+    });
+    const data = await res.json();
+    return { ok: Boolean(data.ok), agent: data.agent, error: data.error || data.message };
+  } catch (error: any) { return { ok: false, error: error.message || 'Gateway unavailable' }; }
 }
 
 export async function submitTelemetryEvent(payload: {

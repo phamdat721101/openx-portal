@@ -73,6 +73,10 @@ const AgentSyncSchema = z.object({
   skills: z.array(z.string().trim().min(1).max(160)).max(100).optional().default([]),
   plan_id: z.enum(['starter', 'pro', 'enterprise']).optional(),
 }).strict();
+const AgentClaimSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_key: z.string().trim().min(20).max(256),
+}).strict();
 
 const MemoryEpisodeSchema = z.object({
   agent_id: z.string().min(1, 'agent_id is required'),
@@ -172,7 +176,11 @@ const mcpTokenFor = (agentId: string): string => {
   if (!token) throw new McpError(409, { error: 'mcp_token_not_configured', message: 'Connect this agent’s own HyperMove bearer token first' });
   return token;
 };
-const selfServiceDreamSetupEnabled = (): boolean => process.env.OPENX_AGENT_REGISTRATION_MODE !== 'production' && process.env.OPENX_DREAM_SELF_SERVICE_ENABLED === 'true' && Boolean(serviceMcpToken());
+/** Explicit opt-in: public Portal setup uses the server-held HyperMove credential. */
+const portalManagedDreamSetupEnabled = (): boolean => Boolean(serviceMcpToken()) && (
+  process.env.OPENX_DREAM_PUBLIC_SETUP_ENABLED === 'true'
+  || (process.env.OPENX_AGENT_REGISTRATION_MODE !== 'production' && process.env.OPENX_DREAM_SELF_SERVICE_ENABLED === 'true')
+);
 const agentKeyFor = (req: Request): string | undefined => typeof req.headers['x-agent-key'] === 'string' ? req.headers['x-agent-key'] : undefined;
 const hasDreamCredentialAuthority = (req: Request, agentId: string): boolean => {
   const adminToken = process.env.OPENX_DREAM_CREDENTIAL_ADMIN_TOKEN;
@@ -298,6 +306,20 @@ app.post('/v1/agent/register', (req: Request, res: Response): void => {
       return;
     }
     res.status(500).json({ ok: false, error: 'internal_error', message: 'Unable to register agent' });
+  }
+});
+
+/** Reconnect an existing local agent after its host configuration is restored. */
+app.post('/v1/agent/claim', (req: Request, res: Response): void => {
+  const parsed = AgentClaimSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; }
+  try {
+    const agent = agentRegistry.claim(parsed.data.agent_id, parsed.data.agent_key);
+    auditorService.ensureAgentWorkspace(agent.agent_id);
+    res.json({ ok: true, agent, sync_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/sync` });
+  } catch (error) {
+    if (error instanceof AgentRegistryError) { res.status(error.status).json({ ok: false, error: error.code }); return; }
+    res.status(500).json({ ok: false, error: 'internal_error' });
   }
 });
 
@@ -485,15 +507,16 @@ app.get('/v1/agents/:agentId/dream/readiness', async (req: Request, res: Respons
   const configured = Boolean(process.env.HYPERMOVE_MCP_URL);
   const vaultConfigured = dreamState.isTokenVaultConfigured();
   const link = dreamState.getLink(req.params.agentId) || null;
-  if (!configured || (!usingServiceCredential && !vaultConfigured) || !hasCredential) {
-    const error = !configured ? 'hypermove_unavailable' : !usingServiceCredential && !vaultConfigured ? 'token_vault_unconfigured' : 'mcp_token_not_configured';
-    const message = !configured ? 'Configure HYPERMOVE_MCP_URL before Dream setup.' : !usingServiceCredential && !vaultConfigured ? 'Configure OPENX_DREAM_TOKEN_ENCRYPTION_KEY before credential setup.' : 'Configure HYPERMOVE_MCP_SERVICE_TOKEN for Portal one-click setup or provide an agent credential.';
-    res.json({ ok: true, ready: false, has_token: hasCredential, token_vault_configured: vaultConfigured, using_service_credential: usingServiceCredential, self_service_enabled: selfServiceDreamSetupEnabled(), hypermove_mcp_configured: configured, is_linked: Boolean(link), link, error, message });
+  const portalSetupEnabled = portalManagedDreamSetupEnabled();
+  if (!configured || (!usingServiceCredential && !vaultConfigured) || !hasCredential || (usingServiceCredential && !portalSetupEnabled)) {
+    const error = !configured ? 'hypermove_unavailable' : !usingServiceCredential && !vaultConfigured ? 'token_vault_unconfigured' : !hasCredential ? 'mcp_token_not_configured' : 'dream_public_setup_disabled';
+    const message = !configured ? 'Configure HYPERMOVE_MCP_URL before Dream setup.' : !usingServiceCredential && !vaultConfigured ? 'Configure OPENX_DREAM_TOKEN_ENCRYPTION_KEY before credential setup.' : !hasCredential ? 'Configure HYPERMOVE_MCP_SERVICE_TOKEN for Portal one-click setup or provide an agent credential.' : 'Set OPENX_DREAM_PUBLIC_SETUP_ENABLED=true to allow Portal-managed Dream setup.';
+    res.json({ ok: true, ready: false, has_token: hasCredential, token_vault_configured: vaultConfigured, using_service_credential: usingServiceCredential, self_service_enabled: portalManagedDreamSetupEnabled(), hypermove_mcp_configured: configured, is_linked: Boolean(link), link, error, message });
     return;
   }
   try {
     const readiness = await hyperMove.call('get_dream_readiness', { agent_id: link?.hypermove_agent_id || req.params.agentId }, mcpTokenFor(req.params.agentId));
-    res.json({ ok: true, ready: Boolean(readiness?.ready ?? true), has_token: true, token_vault_configured: vaultConfigured, using_service_credential: usingServiceCredential, self_service_enabled: selfServiceDreamSetupEnabled(), hypermove_mcp_configured: true, is_linked: Boolean(link), link, readiness });
+    res.json({ ok: true, ready: Boolean(readiness?.ready ?? true), has_token: true, token_vault_configured: vaultConfigured, using_service_credential: usingServiceCredential, self_service_enabled: portalManagedDreamSetupEnabled(), hypermove_mcp_configured: true, is_linked: Boolean(link), link, readiness });
   } catch (error) { respondMcpError(res, error); }
 });
 
@@ -505,8 +528,8 @@ app.post('/v1/agents/:agentId/dream/setup', async (req: Request, res: Response):
   if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
   const parsed = DreamSetupSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; }
-  const selfService = selfServiceDreamSetupEnabled() && !parsed.data.token;
-  if (!selfService && (!parsed.data.token || !hasDreamCredentialAuthority(req, req.params.agentId))) { res.status(401).json({ ok: false, error: selfServiceDreamSetupEnabled() ? 'invalid_dream_credential_authorization' : 'dream_self_service_disabled', message: selfServiceDreamSetupEnabled() ? 'Provide the one-time agent key or an authorized operator token.' : 'One-click setup requires a configured service credential and OPENX_DREAM_SELF_SERVICE_ENABLED=true in development.' }); return; }
+  const selfService = portalManagedDreamSetupEnabled() && !parsed.data.token;
+  if (!selfService && (!parsed.data.token || !hasDreamCredentialAuthority(req, req.params.agentId))) { res.status(401).json({ ok: false, error: portalManagedDreamSetupEnabled() ? 'invalid_dream_credential_authorization' : 'dream_self_service_disabled', message: portalManagedDreamSetupEnabled() ? 'Provide the one-time agent key or an authorized operator token.' : 'One-click setup requires HYPERMOVE_MCP_URL, HYPERMOVE_MCP_SERVICE_TOKEN, and OPENX_DREAM_PUBLIC_SETUP_ENABLED=true.' }); return; }
   try {
     const hypermoveAgentId = parsed.data.hypermove_agent_id || req.params.agentId;
     // Validate before persistence: a rejected agent token must not alter credential or link state.

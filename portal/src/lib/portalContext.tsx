@@ -28,6 +28,7 @@ import {
   fetchUsageSummaries,
   fetchFleetOverview,
   registerAgent as registerGatewayAgent,
+  claimAgent as claimGatewayAgent,
   RegisterAgentInput,
   RegisteredAgentProjection,
   linkDreamAgent,
@@ -63,10 +64,12 @@ interface PortalContextType {
   usageSummaries: UsageSummary[];
   sendTestTelemetry: (agentId?: string) => Promise<void>;
   registerAgent: (input: RegisterAgentInput) => Promise<{ ok: boolean; agentId?: string; agentKey?: string; error?: string }>;
+  claimAgent: (agentId: string, agentKey: string) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
 }
 
 const GATEWAY_URL =
   process.env.NEXT_PUBLIC_OPENX_GATEWAY_URL || 'http://localhost:7411';
+const SHOW_MOCK_AGENTS = process.env.NODE_ENV !== 'production';
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
@@ -100,7 +103,7 @@ function normalizeDreamCycleState(state?: Partial<DreamCycleState>): DreamCycleS
 
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [agents, setAgents] = useState<StudioAgent[]>(MOCK_AGENTS);
+  const [agents, setAgents] = useState<StudioAgent[]>(SHOW_MOCK_AGENTS ? MOCK_AGENTS : []);
   const [skillsData, setSkillsData] = useState<Record<string, SkillItem[]>>(MOCK_SKILLS_DATA);
   const [creditModelData, setCreditModelData] = useState<Record<string, CreditModelConfig>>(MOCK_CREDIT_MODEL_DATA);
   const [dreamCycleData, setDreamCycleData] = useState<Record<string, DreamCycleState>>(MOCK_DREAM_CYCLE_DATA);
@@ -189,16 +192,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       }
       const activity = overview ? overview.agents.map((item) => ({ agent_id: item.agent.agent_id, state: item.connection.state, last_seen_at: item.connection.last_seen_at, activity: item.activity })) : await fetchAgentActivity();
       if (isMounted) setAgentActivity(Object.fromEntries(activity.map((item) => [item.agent_id, item])));
-      const usage = await fetchUsageSummaries();
-      if (isMounted) setUsageSummaries(usage);
+      // Global usage reads require an operator credential in production; avoid a public 401.
+      if (SHOW_MOCK_AGENTS) {
+        const usage = await fetchUsageSummaries();
+        if (isMounted) setUsageSummaries(usage);
+      } else if (isMounted) setUsageSummaries([]);
       // seam:portal-projection
       const agentsForSync = registered.length > 0
-        ? [...MOCK_AGENTS.filter((agent) => !registered.some((record) => record.agent_id === agent.id)), ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))]
-        : MOCK_AGENTS;
-      if (isMounted && registered.length > 0) {
+        ? registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))
+        : SHOW_MOCK_AGENTS ? MOCK_AGENTS : [];
+      if (isMounted && (overview || online)) {
         setAgents((previous) => {
           const gatewayIds = new Set(registered.map((agent) => agent.agent_id));
-          const demos = previous.filter((agent) => !gatewayIds.has(agent.id));
+          const demos = SHOW_MOCK_AGENTS ? previous.filter((agent) => !gatewayIds.has(agent.id)) : [];
           return [...demos, ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))];
         });
       }
@@ -287,6 +293,14 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
     showToast('Agent registered. Save the one-time key before leaving this page.', 'success');
     return { ok: true, agentId: result.agent.agent_id, agentKey: result.agentKey };
+  };
+
+  const claimAgent = async (agentId: string, agentKey: string) => {
+    const result = await claimGatewayAgent({ agent_id: agentId, agent_key: agentKey });
+    if (!result.ok || !result.agent) { showToast(result.error || 'Unable to restore agent', 'error'); return { ok: false, error: result.error }; }
+    setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
+    showToast('Agent restored. Its local scheduler can resume authenticated sync.', 'success');
+    return { ok: true, agentId: result.agent.agent_id };
   };
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -438,6 +452,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         usageSummaries,
         sendTestTelemetry,
         registerAgent,
+        claimAgent,
       }}
     >
       {children}

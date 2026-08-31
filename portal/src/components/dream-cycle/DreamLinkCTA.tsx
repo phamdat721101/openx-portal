@@ -63,14 +63,14 @@ export function DreamLinkCTA({ agentId }: DreamLinkCTAProps) {
           Dream Cycle bridges your agent with HyperMove's offline REM consolidation engine. When idle, your agent replays past execution episodes, consolidates long-term memory embeddings, and autonomously synthesizes new candidate skills for OpenX marketplace review.
         </p>
 
-        {/* 8-Step Verification Safety Notice */}
+        {/* Server-managed setup notice */}
         <div className="rounded-xl border border-outline-variant/30 bg-surface-container/60 p-4 mt-5 space-y-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-on-surface">
             <ShieldCheck className="h-4 w-4 text-secondary" />
-            <span>Server-Verified Ownership Verification (Step 6-8)</span>
+            <span>Server-Managed Dream Setup</span>
           </div>
           <p className="text-[11px] text-on-surface-variant leading-normal">
-            Your connected OpenX agent ID becomes the stable HyperMove Dream ID. The Gateway checks Dream readiness and sends future execution telemetry as idempotent episodes.
+            Your connected OpenX agent ID becomes the stable HyperMove Dream ID. The Gateway checks readiness and sends future execution telemetry as idempotent episodes. Public setup is enabled only when the operator opts in on the Gateway.
           </p>
         </div>
 

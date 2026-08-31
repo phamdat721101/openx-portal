@@ -6,6 +6,37 @@ import { DreamStateStore, dreamState, hyperMove, HyperMoveClient } from '../src/
 import { agentIngestionStore } from '../src/services/agentIngestionStore.js';
 
 describe('End-to-End Dream Cycle Integration Flow', () => {
+  it('allows explicitly opted-in public Portal-managed setup in production', async () => {
+    const previous = {
+      mode: process.env.OPENX_AGENT_REGISTRATION_MODE,
+      url: process.env.HYPERMOVE_MCP_URL,
+      token: process.env.HYPERMOVE_MCP_SERVICE_TOKEN,
+      publicSetup: process.env.OPENX_DREAM_PUBLIC_SETUP_ENABLED,
+    };
+    process.env.OPENX_AGENT_REGISTRATION_MODE = 'production';
+    process.env.HYPERMOVE_MCP_URL = 'https://hypermove.test/mcp';
+    process.env.HYPERMOVE_MCP_SERVICE_TOKEN = 'server-managed-test-token';
+    process.env.OPENX_DREAM_PUBLIC_SETUP_ENABLED = 'true';
+    agentRegistry.clear();
+    const call = vi.spyOn(HyperMoveClient.prototype, 'call').mockResolvedValue({ ready: true });
+    try {
+      const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Public Dream Agent', host_type: 'custom' });
+      const agentId = registration.body.agent.agent_id as string;
+      const readiness = await request(app).get(`/v1/agents/${agentId}/dream/readiness`);
+      expect(readiness.body).toMatchObject({ ok: true, ready: true, using_service_credential: true, self_service_enabled: true });
+      const setup = await request(app).post(`/v1/agents/${agentId}/dream/setup`).send({});
+      expect(setup.status).toBe(201);
+      expect(setup.body).toMatchObject({ setup_mode: 'portal_managed', link: { hypermove_agent_id: agentId } });
+    } finally {
+      call.mockRestore();
+      const restore = (key: string, value: string | undefined) => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
+      restore('OPENX_AGENT_REGISTRATION_MODE', previous.mode);
+      restore('HYPERMOVE_MCP_URL', previous.url);
+      restore('HYPERMOVE_MCP_SERVICE_TOKEN', previous.token);
+      restore('OPENX_DREAM_PUBLIC_SETUP_ENABLED', previous.publicSetup);
+    }
+  });
+
   it('executes full lifecycle: setup -> telemetry -> trigger -> stage summaries -> wake context', async () => {
     process.env.OPENX_DREAM_CREDENTIAL_ADMIN_TOKEN = 'test-admin-secret-token-12345';
     process.env.OPENX_DREAM_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');

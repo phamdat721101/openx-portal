@@ -130,6 +130,16 @@ export class AgentRegistry {
     return { agent: this.project(agent), credential, created: true };
   }
 
+  /** Restores a previously issued identity without rotating its credential or changing liveness. */
+  public claim(agentId: string, credential: string): AgentProjection {
+    this.assertAvailable();
+    const agent = this.records.get(agentId);
+    if (!agent || !verifyCredential(credential, agent.credential_hash)) {
+      throw new AgentRegistryError('invalid_agent_key', 401);
+    }
+    return this.project(agent);
+  }
+
   public recordHeartbeat(agentId: string, metadata: { model?: string; capabilities?: string[] }): AgentProjection {
     this.assertAvailable();
     let agent = this.records.get(agentId);
