@@ -3,7 +3,7 @@
 import React from 'react';
 import { usePortal } from '@/lib/portalContext';
 import { usePortalAuth } from './PortalAuthProvider';
-import { LogIn, LogOut, Sun, Moon, Copy, Check, ShieldAlert } from 'lucide-react';
+import { LogIn, LogOut, Sun, Moon, Copy, Check, ShieldAlert, Bot } from 'lucide-react';
 import Link from 'next/link';
 
 export function HeaderWallet() {
@@ -20,6 +20,13 @@ export function HeaderWallet() {
 
   return (
     <div className="flex items-center gap-3">
+      <a
+        href="https://chatgpt.com/?hints=search&q=OpenX%20Portal%20agent%20management"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="hidden lg:inline-flex items-center gap-1 rounded-lg border border-primary/30 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
+        title="Open OpenX Portal tools in ChatGPT"
+      ><Bot className="h-3.5 w-3.5" />Open in ChatGPT</a>
       {/* Dark / Light Mode Switcher */}
       <button
         onClick={toggleTheme}

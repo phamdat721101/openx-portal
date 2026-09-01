@@ -113,10 +113,31 @@ describe('wallet and advisory auditor APIs', () => {
       expect(normalizedChat.status).toBe(201); expect(normalizedChat.body.turn.content).toBe('The lesson is supported by the recorded evidence.');
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: { unsupported: 'shape' }, confidence: 'high', citations: [{ lesson_id: lesson.id }] }) } }] }), { status: 200 }));
       const malformedChat = await request(app).post(`/v1/agents/${agentId}/audits/${laterJob.id}/chat`).send({ message: 'What failed?', client_request_id: 'workspace-chat-malformed' });
-      expect(malformedChat.status).toBe(502); expect(malformedChat.body).toMatchObject({ error: 'auditor_chat_unavailable', message: 'The auditor returned an invalid answer. Please try again.' }); expect(JSON.stringify(malformedChat.body)).not.toContain('invalid_type');
+      expect(malformedChat.status).toBe(201); expect(malformedChat.body.turn).toMatchObject({ role: 'auditor', confidence: 'low' }); expect(malformedChat.body.turn.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'context', id: 'agent-summary' })])); expect(JSON.stringify(malformedChat.body)).not.toContain('invalid_type');
     } finally {
       fetchMock.mockRestore(); const restore = (key: string, value: string | undefined): void => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
       restore('ZEROG_COMPUTE_ENABLED', original.enabled); restore('ZEROG_COMPUTE_API_URL', original.url); restore('ZEROG_COMPUTE_API_KEY', original.key); restore('ZEROG_COMPUTE_MODEL', original.model);
     }
+  });
+
+  it('answers from connected-agent and completed Dream evidence when the audit has no lessons', async () => {
+    const original = { url: process.env.ZEROG_COMPUTE_API_URL, key: process.env.ZEROG_COMPUTE_API_KEY, model: process.env.ZEROG_COMPUTE_MODEL };
+    delete process.env.ZEROG_COMPUTE_API_URL; delete process.env.ZEROG_COMPUTE_API_KEY; delete process.env.ZEROG_COMPUTE_MODEL;
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Evidence-only Agent', host_type: 'custom', model: 'evidence-model', capabilities: ['telemetry'] });
+    const agentId = registration.body.agent.agent_id as string;
+    const link = dreamState.link(agentId, agentId);
+    const run = dreamState.createRun(agentId, link, 'balanced', 0.1);
+    dreamState.updateRun(run.id, { status: 'completed', source: 'hypermove_sync', completed_at: new Date().toISOString(), result: { stage_summaries: { consolidation: { memory_nodes_updated: 2 } } } });
+    const job = auditorService.queueDreamAudit(agentId, run.id);
+    const workspace = await request(app).get(`/v1/agents/${agentId}/audits/${job.id}/workspace`);
+    const dreamChat = await request(app).post(`/v1/agents/${agentId}/audits/${job.id}/chat`).send({ message: 'What is the latest Dream status?', client_request_id: 'no-lessons-evidence-dream-chat' });
+    const lessonChat = await request(app).post(`/v1/agents/${agentId}/audits/${job.id}/chat`).send({ message: 'What lessons are available?', client_request_id: 'no-lessons-evidence-lesson-chat' });
+    expect(workspace.body.workspace).toMatchObject({ lessons: [], evidence: { agent: { display_name: 'Evidence-only Agent' }, dream: { status: 'completed', source: 'hypermove_sync', has_stage_summaries: true } } });
+    expect(dreamChat.status).toBe(201); expect(dreamChat.body.turn.content).toContain('latest Dream run is completed');
+    expect(dreamChat.body.turn.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'dream', id: 'latest-run' })]));
+    expect(lessonChat.status).toBe(201); expect(lessonChat.body.turn.content).toContain('No managed lessons are recorded');
+    expect(lessonChat.body.turn.content).not.toBe(dreamChat.body.turn.content);
+    const restore = (key: string, value: string | undefined): void => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
+    restore('ZEROG_COMPUTE_API_URL', original.url); restore('ZEROG_COMPUTE_API_KEY', original.key); restore('ZEROG_COMPUTE_MODEL', original.model);
   });
 });

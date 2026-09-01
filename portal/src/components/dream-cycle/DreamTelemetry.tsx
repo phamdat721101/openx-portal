@@ -1,7 +1,7 @@
 import React from 'react';
 import { DreamCycleState } from '@/lib/types';
 import { usePortal } from '@/lib/portalContext';
-import { dreamRunStreamUrl, fetchDreamLessons, fetchDreamState, fetchWakeContext, reconcileDreamRun, DreamLesson, DreamTriggerResponse, WakeContextResponse } from '@/lib/api/agentGateway';
+import { dreamRunStreamUrl, fetchDreamLessons, fetchDreamState, fetchWakeContext, reconcileDreamRun, syncCompletedDreamRun, DreamLesson, DreamTriggerResponse, WakeContextResponse } from '@/lib/api/agentGateway';
 import { Moon, Sparkles, Activity, Brain, Database, ShieldCheck, CheckCircle2, Copy, Check, Loader2, ListOrdered, Terminal } from 'lucide-react';
 
 interface DreamTelemetryProps {
@@ -35,6 +35,7 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
   const [wakeData, setWakeData] = React.useState<WakeContextResponse | null>(null);
   const [lessons, setLessons] = React.useState<DreamLesson[]>([]);
   const [copiedPrompt, setCopiedPrompt] = React.useState(false);
+  const [syncingExternalResult, setSyncingExternalResult] = React.useState(false);
 
   const loadWakeContext = React.useCallback(async () => {
     const data = await fetchWakeContext(agentId);
@@ -76,6 +77,16 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
     const result = await reconcileDreamRun(agentId);
     if (!result.ok || !result.run) { showToast(result.error || 'Unable to refresh Dream status.', 'error'); return; }
     setRun(result.run);
+  };
+  const syncExternalResult = async () => {
+    setSyncingExternalResult(true);
+    const result = await syncCompletedDreamRun(agentId);
+    setSyncingExternalResult(false);
+    if (!result.ok || !result.run) { showToast(result.error || 'No completed HyperMove result is available yet.', 'error'); return; }
+    setRun(result.run);
+    void fetchDreamLessons(agentId).then(setLessons);
+    void loadWakeContext();
+    showToast(result.imported ? 'Completed HyperMove Dream data synced to the Portal.' : 'Portal already has the latest HyperMove Dream data.', 'success');
   };
 
   const handleCopyPrompt = (text: string) => {
@@ -146,6 +157,9 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
               Refresh status
             </button>
           )}
+          <button onClick={syncExternalResult} disabled={syncingExternalResult || run?.status === 'running'} className="flex items-center gap-2 rounded-xl border border-secondary/50 px-4 py-2.5 font-headline text-xs font-bold text-secondary hover:bg-secondary/10 disabled:opacity-50">
+            {syncingExternalResult ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing result…</> : 'Sync completed Dream data'}
+          </button>
 
           {/* Aggregate Telemetry Counts */}
           <div className="grid grid-cols-3 gap-3 border-t lg:border-t-0 lg:border-l border-outline-variant/30 pt-4 lg:pt-0 lg:pl-6">

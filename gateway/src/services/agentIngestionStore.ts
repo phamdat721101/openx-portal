@@ -111,6 +111,11 @@ class AgentIngestionStore {
     return [...(this.skillsByAgent.get(agentId) || [])];
   }
 
+  /** Gateway-only source list for durable auditor evidence; never expose raw values through Portal projections. */
+  public getMemoryEpisodes(agentId: string): StoredEpisode[] {
+    return [...(this.episodesByAgent.get(agentId) || [])];
+  }
+
   public getSkillStatus(agentId: string, skillId: string): SkillLifecycleStatus | undefined {
     return this.skillStatuses[`${agentId}:${skillId}`];
   }

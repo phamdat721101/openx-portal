@@ -9,7 +9,7 @@ import { buildAgentConnectionPrompt } from '@/lib/agentConnectionPrompt';
 import { Bot, ArrowRight, Moon, Radio, AlertCircle, Plus, X, Copy, Activity } from 'lucide-react';
 
 export default function AgentStudioPage() {
-  const { agents, agentActivity, usageSummaries, registerAgent, claimAgent, gatewayOnline } = usePortal();
+  const { agents, agentActivity, dreamStatusByAgent, usageSummaries, knowledgeSyncByAgent, registerAgent, claimAgent, gatewayOnline } = usePortal();
   const { authenticated, walletAddress } = usePortalAuth();
   const [showConnect, setShowConnect] = useState(false);
   const [displayName, setDisplayName] = useState('OpenX Research Agent');
@@ -88,8 +88,10 @@ export default function AgentStudioPage() {
           {agents.map((agent) => {
             const hasDreamLinked = !!agent.hypermove_dream_agent_id;
             const activity = agentActivity[agent.id];
+            const dreamRun = dreamStatusByAgent[agent.id];
             const task = activity?.activity.current_task || activity?.activity.latest_task;
             const usage = usageSummaries.find((summary) => summary.agent_id === agent.id);
+            const knowledge = knowledgeSyncByAgent[agent.id];
 
             return (
               <Link
@@ -103,7 +105,7 @@ export default function AgentStudioPage() {
                     <TrainingStagePill stage={agent.training_stage} />
                     {hasDreamLinked ? (
                       <span className="inline-flex items-center gap-1 rounded bg-secondary/15 px-2 py-0.5 font-mono text-[10px] font-bold text-secondary border border-secondary/30">
-                        <Moon className="h-2.5 w-2.5" /> REM Active
+                        <Moon className="h-2.5 w-2.5" /> {dreamRun?.status === 'completed' ? 'Dream completed' : dreamRun?.status === 'running' ? 'Dream running' : dreamRun?.status === 'payment_required' ? 'Dream payment required' : 'Dream linked'}
                       </span>
                     ) : (
                       <span className="rounded bg-surface-container-high px-2 py-0.5 font-mono text-[10px] text-on-surface-variant">
@@ -126,8 +128,10 @@ export default function AgentStudioPage() {
                     </div>
                     {task ? <div className="mt-2"><p className="truncate text-xs font-semibold text-on-surface">{task.title || task.task_id}</p><p className="mt-1 truncate text-[11px] text-on-surface-variant">{task.phase || 'Awaiting next phase'} · {task.model}</p>{task.tools_used.length > 0 && <p className="mt-1 truncate text-[10px] text-agent-accent">{task.tools_used.join(', ')}</p>}</div> : <p className="mt-2 text-[11px] text-on-surface-variant">{agent.connection_state === 'registered' ? 'Registered — awaiting first heartbeat.' : 'No task activity received yet.'}</p>}
                   </div>
+                  {dreamRun?.status === 'completed' && <p className="mt-2 text-[10px] font-mono text-secondary">{dreamRun.source === 'hypermove_sync' ? 'HyperMove result synced' : 'Gateway Dream completed'}{dreamRun.completed_at ? ` · ${new Date(dreamRun.completed_at).toLocaleString()}` : ''}</p>}
                   <p className="text-xs text-on-surface-variant mt-3 line-clamp-2 leading-relaxed">{agent.description}</p>
                   {usage && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-on-surface-variant"><span className="text-primary">{usage.plan_id}</span><span>{(usage.input_tokens + usage.output_tokens).toLocaleString()} tokens</span><span>{usage.tool_calls} tools</span><span>{usage.skill_calls} skills</span></div>}
+                  {knowledge && <p className={`mt-2 text-[10px] font-mono ${knowledge.state === 'degraded' ? 'text-error' : knowledge.state === 'complete' ? 'text-secondary' : 'text-primary'}`}>0G evidence sync · {knowledge.state} · {knowledge.uploaded_records}/{knowledge.total_records} archived</p>}
                 </div>
 
                 {/* Action Footer */}

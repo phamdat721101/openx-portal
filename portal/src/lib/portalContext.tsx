@@ -23,6 +23,7 @@ import {
   IngestedTraceEvent,
   AgentActivityProjection,
   UsageSummary,
+  KnowledgeSync,
   fetchRegisteredAgents,
   fetchAgentActivity,
   fetchUsageSummaries,
@@ -61,7 +62,9 @@ interface PortalContextType {
   telemetryEvents: IngestedTraceEvent[];
   isLiveByAgent: Record<string, boolean>;
   agentActivity: Record<string, AgentActivityProjection>;
+  dreamStatusByAgent: Record<string, NonNullable<import('./api/agentGateway').FleetOverviewAgent['dream']['latest_run']>>;
   usageSummaries: UsageSummary[];
+  knowledgeSyncByAgent: Record<string, KnowledgeSync>;
   sendTestTelemetry: (agentId?: string) => Promise<void>;
   registerAgent: (input: RegisterAgentInput) => Promise<{ ok: boolean; agentId?: string; agentKey?: string; error?: string }>;
   claimAgent: (agentId: string, agentKey: string) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
@@ -113,7 +116,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [telemetryEvents, setTelemetryEvents] = useState<IngestedTraceEvent[]>([]);
   const [isLiveByAgent, setIsLiveByAgent] = useState<Record<string, boolean>>({});
   const [agentActivity, setAgentActivity] = useState<Record<string, AgentActivityProjection>>({});
+  const [dreamStatusByAgent, setDreamStatusByAgent] = useState<Record<string, NonNullable<import('./api/agentGateway').FleetOverviewAgent['dream']['latest_run']>>>({});
   const [usageSummaries, setUsageSummaries] = useState<UsageSummary[]>([]);
+  const [knowledgeSyncByAgent, setKnowledgeSyncByAgent] = useState<Record<string, KnowledgeSync>>({});
 
   const projectGatewayAgent = (agent: RegisteredAgentProjection, dreamLink?: string | null): StudioAgent => ({
     id: agent.agent_id,
@@ -182,6 +187,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       const overview = await fetchFleetOverview();
       const registered = overview ? overview.agents.map((item) => item.agent) : await fetchRegisteredAgents();
       const dreamLinks = new Map((overview?.agents || []).map((item) => [item.agent.agent_id, item.dream.hypermove_agent_id]));
+      if (isMounted) setDreamStatusByAgent(Object.fromEntries((overview?.agents || []).flatMap((item) => item.dream.latest_run ? [[item.agent.agent_id, item.dream.latest_run] as const] : [])));
+      if (isMounted) setKnowledgeSyncByAgent(Object.fromEntries((overview?.agents || []).flatMap((item) => item.knowledge_sync ? [[item.agent.agent_id, item.knowledge_sync] as const] : [])));
       const skillEntries = await Promise.all(registered.map(async (agent) => [agent.agent_id, await fetchAgentSkills(agent.agent_id)] as const));
       if (isMounted) {
         setSkillsData((previous) => {
@@ -291,6 +298,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, error: result.error };
     }
     setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
+    if (result.knowledgeSync) setKnowledgeSyncByAgent((previous) => ({ ...previous, [result.agent!.agent_id]: result.knowledgeSync! }));
     showToast('Agent registered. Save the one-time key before leaving this page.', 'success');
     return { ok: true, agentId: result.agent.agent_id, agentKey: result.agentKey };
   };
@@ -299,6 +307,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     const result = await claimGatewayAgent({ agent_id: agentId, agent_key: agentKey });
     if (!result.ok || !result.agent) { showToast(result.error || 'Unable to restore agent', 'error'); return { ok: false, error: result.error }; }
     setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
+    if (result.knowledgeSync) setKnowledgeSyncByAgent((previous) => ({ ...previous, [result.agent!.agent_id]: result.knowledgeSync! }));
     showToast('Agent restored. Its local scheduler can resume authenticated sync.', 'success');
     return { ok: true, agentId: result.agent.agent_id };
   };
@@ -449,7 +458,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         telemetryEvents,
         isLiveByAgent,
         agentActivity,
+        dreamStatusByAgent,
         usageSummaries,
+        knowledgeSyncByAgent,
         sendTestTelemetry,
         registerAgent,
         claimAgent,

@@ -79,11 +79,13 @@ export interface AgentActivityProjection {
 export interface FleetOverviewAgent {
   agent: RegisteredAgentProjection;
   connection: { state: RegisteredAgentProjection['state']; last_seen_at: string | null };
-  dream: { linked: boolean; hypermove_agent_id: string | null };
+  dream: { linked: boolean; hypermove_agent_id: string | null; latest_run?: { id: string; status: string; completed_at: string | null; source: 'gateway' | 'hypermove_sync'; learning_brief?: DreamTriggerResponse['run'] extends infer Run ? Run extends { learning_brief?: infer Brief } ? Brief : never : never } };
   activity: AgentActivityProjection['activity'];
   audit: { ready: boolean; job_count: number };
+  knowledge_sync?: KnowledgeSync;
 }
 export interface FleetOverview { agents: FleetOverviewAgent[]; summary: { registered: number; online: number; linked: number; auditor_ready: number }; }
+export interface KnowledgeSync { agent_id: string; state: 'queued' | 'collecting' | 'uploading' | 'complete' | 'degraded'; total_records: number; uploaded_records: number; pending_records: number; failed_records: number; source_counts: Record<string, number>; updated_at: string; safe_error?: string; }
 
 export interface UsageSummary {
   agent_id: string;
@@ -140,12 +142,13 @@ export interface WalletSnapshot { address: string | null; chain_id: number; netw
 export interface AuditRun { id: string; created_at: string; trigger: string; findings: Array<{ id: string; dimension: string; verdict: string; title: string; evidence: string[] }> }
 export interface DreamAuditJob { id: string; dream_run_id: string; status: 'queued' | 'reviewing' | 'completed' | 'retrying' | 'not_configured'; attempts: number; next_attempt_at: string | null; error?: string; review?: { model: string; lesson_reviews: Array<{ lesson_id: string; verdict: 'keep' | 'revise' | 'reject'; rationale: string; evidence: string[] }>; skill_candidate?: { skill_slug: string; display_name: string; capability_ids: string[]; rationale: string } }; }
 export interface AuditEvent { id: string; audit_job_id: string; agent_id: string; phase: 'queued' | 'gathering_evidence' | 'requesting_review' | 'validating' | 'persisting' | 'completed' | 'retrying' | 'failed' | 'not_configured'; message: string; created_at: string; }
-export interface AuditChatTurn { id: string; audit_job_id: string; agent_id: string; role: 'user' | 'auditor'; content: string; confidence?: 'high' | 'medium' | 'low'; citations?: Array<{ kind: 'lesson' | 'review' | 'context'; id: string; label: string; excerpt: string }>; created_at: string; }
-export interface AuditorWorkspace { job: DreamAuditJob; events: AuditEvent[]; lessons: Array<{ id: string; content: string; state: string; source: string; created_at: string }>; lesson_scope: 'dream_run' | 'agent'; context: { generated_at?: string; morning_brief?: string; constraints_count?: number } | null; chat: AuditChatTurn[]; }
+export interface AuditChatTurn { id: string; audit_job_id: string; agent_id: string; role: 'user' | 'auditor'; content: string; confidence?: 'high' | 'medium' | 'low'; citations?: Array<{ kind: 'lesson' | 'review' | 'context' | 'agent' | 'dream' | 'task' | 'archive'; id: string; label: string; excerpt: string }>; created_at: string; }
+export interface AuditorWorkspace { job: DreamAuditJob; events: AuditEvent[]; lessons: Array<{ id: string; content: string; state: string; source: string; created_at: string }>; lesson_scope: 'dream_run' | 'agent'; context: { generated_at?: string; morning_brief?: string; constraints_count?: number } | null; evidence: { agent: { id: string; display_name: string; state: string; last_seen_at: string | null; model: string | null; capabilities: string[] } | null; tasks: { total: number; completed: number; failed: number; current_task: unknown; recent: Array<{ task_id: string; state: string }> }; telemetry: { event_count: number; models: string[]; tools: string[] }; dream: { id: string; status: string; source: string; completed_at: string | null; has_stage_summaries: boolean } | null; usage: { tool_calls: number; skill_calls: number; input_tokens: number; output_tokens: number } }; chat: AuditChatTurn[]; }
 
 export interface DreamLinkResponse { ok: boolean; link?: { hypermove_agent_id: string }; error?: string; message?: string; }
 export interface DreamTriggerResponse {
   ok: boolean;
+  imported?: boolean;
   run?: {
     id: string;
     status: string;
@@ -153,6 +156,7 @@ export interface DreamTriggerResponse {
     learning_brief?: { generated_at: string; morning_brief?: string; constraints_count: number; stage_summaries?: Record<string, unknown> };
     result?: { stage_summaries?: Record<string, unknown>; status?: string };
     reconciliation?: { last_checked_at: string; upstream_status?: string; last_error?: string };
+    source?: 'gateway' | 'hypermove_sync';
   };
   quote?: unknown;
   error?: string;
@@ -170,6 +174,28 @@ export interface DreamLesson { id: string; openx_agent_id: string; state: 'UNREV
 
 const GATEWAY_URL =
   process.env.NEXT_PUBLIC_OPENX_GATEWAY_URL || 'http://localhost:7411';
+
+/** Browser-local WebMCP tools use this deliberately public, slim Gateway API. */
+export type WebMcpSection = 'studio' | 'skills' | 'credit-model' | 'dream-cycle' | 'auditor';
+async function webMcpRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${GATEWAY_URL}/v1/webmcp${path}`, {
+    ...init,
+    headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = await response.json().catch(() => ({ ok: false, error: 'invalid_gateway_response' }));
+  return (!response.ok ? { ...body, ok: false } : body) as T;
+}
+export const webMcpFleet = () => webMcpRequest<{ ok: boolean; agents?: unknown[]; error?: string }>('/agents');
+export const webMcpAgentOverview = (agentId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}`);
+export const webMcpSkills = (agentId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/skills`);
+export const webMcpWallet = (agentId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/wallet`);
+export const webMcpDream = (agentId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/dream`);
+export const webMcpAuditor = (agentId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/auditor`);
+export const webMcpConnectAgent = (input: RegisterAgentInput) => webMcpRequest<Record<string, unknown>>('/agents', { method: 'POST', body: JSON.stringify(input) });
+export const webMcpSetSkillStatus = (agentId: string, skillId: string, status: GatewaySkillItem['status']) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(skillId)}/status`, { method: 'POST', body: JSON.stringify({ status }) });
+export const webMcpTriggerDream = (agentId: string, preset: 'frugal' | 'balanced' | 'thorough' = 'balanced') => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/dream/trigger`, { method: 'POST', body: JSON.stringify({ preset, budget_usd: 0.1 }) });
+export const webMcpAskAuditor = (agentId: string, message: string, clientRequestId: string) => webMcpRequest<Record<string, unknown>>(`/agents/${encodeURIComponent(agentId)}/auditor/chat`, { method: 'POST', body: JSON.stringify({ message, client_request_id: clientRequestId }) });
 
 export async function checkGatewayHealth(): Promise<boolean> {
   try {
@@ -324,7 +350,7 @@ export async function askAuditor(agentId: string, auditJobId: string, message: s
   try { const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/audits/${encodeURIComponent(auditJobId)}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ message, client_request_id: clientRequestId }), signal: AbortSignal.timeout(15_000) }); const body = await res.json(); return { ok: Boolean(body.ok), turn: body.turn, error: body.error, message: body.message }; } catch { return { ok: false, error: 'gateway_unavailable' }; }
 }
 
-export async function registerAgent(input: RegisterAgentInput): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; agentKey?: string; error?: string }> {
+export async function registerAgent(input: RegisterAgentInput): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; agentKey?: string; knowledgeSync?: KnowledgeSync; error?: string }> {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/agent/register`, {
       method: 'POST',
@@ -332,19 +358,19 @@ export async function registerAgent(input: RegisterAgentInput): Promise<{ ok: bo
       body: JSON.stringify(input),
     });
     const data = await res.json();
-    return { ok: Boolean(data.ok), agent: data.agent, agentKey: data.credential?.agent_key, error: data.message || data.error };
+    return { ok: Boolean(data.ok), agent: data.agent, agentKey: data.credential?.agent_key, knowledgeSync: data.knowledge_sync, error: data.message || data.error };
   } catch (error: any) {
     return { ok: false, error: error.message || 'Gateway unavailable' };
   }
 }
 
-export async function claimAgent(input: ClaimAgentInput): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; error?: string }> {
+export async function claimAgent(input: ClaimAgentInput): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; knowledgeSync?: KnowledgeSync; error?: string }> {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/agent/claim`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(input),
     });
     const data = await res.json();
-    return { ok: Boolean(data.ok), agent: data.agent, error: data.error || data.message };
+    return { ok: Boolean(data.ok), agent: data.agent, knowledgeSync: data.knowledge_sync, error: data.error || data.message };
   } catch (error: any) { return { ok: false, error: error.message || 'Gateway unavailable' }; }
 }
 
@@ -416,6 +442,13 @@ export async function fetchDreamState(agentId: string): Promise<DreamStateRespon
 export async function reconcileDreamRun(agentId: string): Promise<DreamTriggerResponse> {
   try {
     const response = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/dream/reconcile`, { method: 'POST', headers: { Accept: 'application/json' } });
+    return await response.json();
+  } catch (error: any) { return { ok: false, error: error.message || 'Gateway unavailable' }; }
+}
+
+export async function syncCompletedDreamRun(agentId: string): Promise<DreamTriggerResponse> {
+  try {
+    const response = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/dream/sync`, { method: 'POST', headers: { Accept: 'application/json' } });
     return await response.json();
   } catch (error: any) { return { ok: false, error: error.message || 'Gateway unavailable' }; }
 }

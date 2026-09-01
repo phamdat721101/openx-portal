@@ -9,7 +9,7 @@ export interface DreamLink { openx_agent_id: string; hypermove_agent_id: string;
 export interface DreamSettlement { status: 'settled' | 'failed'; quote_id: string; transaction_hash?: string; amount: string; currency: 'RLUSD'; destination: string; attempted_at: string; reason?: string; }
 export interface LearningBrief { generated_at: string; stage_summaries?: Record<string, unknown>; morning_brief?: string; constraints_count: number; }
 export interface DreamReconciliation { last_checked_at: string; upstream_status?: string; last_error?: string; }
-export interface DreamRun { id: string; openx_agent_id: string; hypermove_agent_id: string; status: DreamRunStatus; preset: 'frugal' | 'balanced' | 'thorough'; budget_usd: number; created_at: string; completed_at?: string; result?: unknown; error?: string; quote?: unknown; settlement?: DreamSettlement; learning_brief?: LearningBrief; reconciliation?: DreamReconciliation; }
+export interface DreamRun { id: string; openx_agent_id: string; hypermove_agent_id: string; status: DreamRunStatus; preset: 'frugal' | 'balanced' | 'thorough'; budget_usd: number; created_at: string; completed_at?: string; result?: unknown; error?: string; quote?: unknown; settlement?: DreamSettlement; learning_brief?: LearningBrief; reconciliation?: DreamReconciliation; source?: 'gateway' | 'hypermove_sync'; upstream_fingerprint?: string; }
 export interface ManagedLesson { id: string; openx_agent_id: string; run_id?: string; state: 'UNREVIEWED' | 'IN_REVIEW' | 'PROMOTED_CONSTRAINT' | 'QUARANTINED' | 'REJECTED'; content: string; source: 'manual' | 'dream_cycle'; created_at: string; resolved_at?: string; }
 
 interface EncryptedSecret { iv: string; tag: string; ciphertext: string; }
@@ -26,12 +26,30 @@ export class DreamStateStore {
   }
   getLink(openxAgentId: string) { return this.state.links.find((item) => item.openx_agent_id === openxAgentId); }
   createRun(openxAgentId: string, link: DreamLink, preset: DreamRun['preset'], budgetUsd: number) {
-    const run: DreamRun = { id: randomUUID(), openx_agent_id: openxAgentId, hypermove_agent_id: link.hypermove_agent_id, status: 'running', preset, budget_usd: budgetUsd, created_at: new Date().toISOString() };
+    const run: DreamRun = { id: randomUUID(), openx_agent_id: openxAgentId, hypermove_agent_id: link.hypermove_agent_id, status: 'running', preset, budget_usd: budgetUsd, created_at: new Date().toISOString(), source: 'gateway' };
     this.state.runs.unshift(run); this.persist(); return run;
+  }
+  importCompletedRun(openxAgentId: string, link: DreamLink, result: unknown, learningBrief: LearningBrief, upstreamFingerprint: string): { run: DreamRun; created: boolean } {
+    const existing = this.state.runs.find((item) => item.openx_agent_id === openxAgentId && item.source === 'hypermove_sync' && item.upstream_fingerprint === upstreamFingerprint);
+    const reconciliation: DreamReconciliation = { last_checked_at: new Date().toISOString(), upstream_status: 'completed' };
+    if (existing) {
+      Object.assign(existing, { result, learning_brief: learningBrief, reconciliation });
+      this.persist();
+      return { run: existing, created: false };
+    }
+    const now = new Date().toISOString();
+    const run: DreamRun = {
+      id: randomUUID(), openx_agent_id: openxAgentId, hypermove_agent_id: link.hypermove_agent_id,
+      status: 'completed', preset: 'balanced', budget_usd: 0, created_at: now, completed_at: now,
+      result, learning_brief: learningBrief, reconciliation, source: 'hypermove_sync', upstream_fingerprint: upstreamFingerprint,
+    };
+    this.state.runs.unshift(run); this.persist();
+    return { run, created: true };
   }
   updateRun(id: string, patch: Partial<DreamRun>) { const run = this.state.runs.find((item) => item.id === id); if (!run) return undefined; Object.assign(run, patch); this.persist(); return run; }
   getRun(id: string) { return this.state.runs.find((item) => item.id === id); }
   latestRun(openxAgentId: string) { return this.state.runs.find((item) => item.openx_agent_id === openxAgentId); }
+  listRuns(openxAgentId: string) { return this.state.runs.filter((item) => item.openx_agent_id === openxAgentId); }
   runningRuns() { return this.state.runs.filter((item) => item.status === 'running'); }
   listLessons(openxAgentId: string) { return this.state.lessons.filter((item) => item.openx_agent_id === openxAgentId); }
   addLesson(openxAgentId: string, content: string, source: ManagedLesson['source'] = 'manual', runId?: string) { const normalized = content.trim(); const existing = this.state.lessons.find((item) => item.openx_agent_id === openxAgentId && item.run_id === runId && item.content === normalized); if (existing) return existing; const lesson: ManagedLesson = { id: randomUUID(), openx_agent_id: openxAgentId, ...(runId ? { run_id: runId } : {}), content: normalized, source, state: 'UNREVIEWED', created_at: new Date().toISOString() }; this.state.lessons.unshift(lesson); this.persist(); return lesson; }

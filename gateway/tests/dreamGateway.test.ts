@@ -69,6 +69,29 @@ describe('Dream Gateway routes', () => {
     call.mockRestore();
   });
 
+  it('imports an externally completed Dream once without overwriting a stale payment-required Gateway run', async () => {
+    process.env.OPENX_DREAM_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 14).toString('base64');
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'External Dream Import Agent', host_type: 'custom' });
+    const agentId = registration.body.agent.agent_id;
+    const link = dreamState.link(agentId, agentId);
+    dreamState.setMcpToken(agentId, 'external-dream-import-token');
+    const staleRun = dreamState.createRun(agentId, link, 'balanced', 0.1);
+    dreamState.updateRun(staleRun.id, { status: 'payment_required' });
+    const call = vi.spyOn(HyperMoveClient.prototype, 'call').mockResolvedValue({ status: 'completed', run_id: 'hypermove-completed-run-1', memories_count: 4, stage_summaries: { consolidation: { memory_nodes_updated: 4 } }, daily_digest: 'External Dream completion imported.' });
+
+    const first = await request(app).post(`/v1/agents/${agentId}/dream/sync`).send({});
+    const second = await request(app).post(`/v1/agents/${agentId}/dream/sync`).send({});
+    const overview = await request(app).get('/v1/agents/overview');
+
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ ok: true, imported: true, run: { status: 'completed', source: 'hypermove_sync' } });
+    expect(second.body).toMatchObject({ ok: true, imported: false, run: { id: first.body.run.id, status: 'completed' } });
+    expect(dreamState.getRun(staleRun.id)).toMatchObject({ status: 'payment_required' });
+    expect(dreamState.latestRun(agentId)).toMatchObject({ id: first.body.run.id, status: 'completed', source: 'hypermove_sync' });
+    expect(overview.body.agents.find((item: { agent: { agent_id: string } }) => item.agent.agent_id === agentId).dream.latest_run).toMatchObject({ id: first.body.run.id, status: 'completed', source: 'hypermove_sync' });
+    call.mockRestore();
+  });
+
   it('requires a link before a run and supports the OpenX lesson overlay lifecycle', async () => {
     agentRegistry.clear();
     const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Dream route agent', host_type: 'custom' });

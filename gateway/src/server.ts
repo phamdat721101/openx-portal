@@ -15,6 +15,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
 import {
   composeAgentStatus,
   parseFields,
@@ -27,6 +28,7 @@ import { xrplTestnetSettlement } from './services/xrplSettlement.js';
 import { nPaymentXrplWallet } from './services/nPaymentXrplWallet.js';
 import { statusWalletService } from './services/walletService.js';
 import { auditorService } from './services/auditorService.js';
+import { agentKnowledgeArchive, KnowledgeInput } from './services/agentKnowledgeArchive.js';
 import { SkillLifecycleStatus } from './types/agentIngestion.js';
 
 dotenv.config();
@@ -65,7 +67,7 @@ const AgentRegisterSchema = z.object({
   host_type: z.enum(['kiro-cli', 'claude-code', 'adk-python', 'custom']),
   owner_address: z.string().trim().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
   wallet_address: z.string().trim().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
-});
+}).strict();
 const AgentSyncSchema = z.object({
   agent_id: z.string().min(1),
   model: z.string().trim().max(120).optional(),
@@ -124,6 +126,7 @@ const DreamCredentialSchema = z.object({ token: z.string().trim().min(20).max(40
 const DreamSetupSchema = z.object({ token: z.string().trim().min(20).max(4096).optional(), hypermove_agent_id: z.string().trim().min(1).max(160).optional() }).strict();
 const SkillStatusSchema = z.object({ status: z.enum(['active', 'in_audit', 'deprecated']) }).strict();
 const AuditorChatSchema = z.object({ message: z.string().trim().min(1).max(1200), client_request_id: z.string().trim().min(1).max(120).optional() }).strict();
+const WebMcpNavigationSchema = z.object({ section: z.enum(['studio', 'skills', 'credit-model', 'dream-cycle', 'auditor']) }).strict();
 const LessonSchema = z.object({ content: z.string().trim().min(1).max(4000), source: z.enum(['manual', 'dream_cycle']).default('manual') });
 const LessonResolutionSchema = z.object({ action: z.enum(['PROMOTED_CONSTRAINT', 'QUARANTINED', 'REJECTED']) });
 
@@ -164,7 +167,7 @@ const persistDreamLessons = (agentId: string, runId: string, result: unknown): v
     if (content?.trim()) dreamState.addLesson(agentId, content.trim(), 'dream_cycle', runId);
   }
 };
-const queueDreamAudit = (run: DreamRun | undefined): void => { if (run && (run.status === 'completed' || run.status === 'failed')) { const job = auditorService.queueDreamAudit(run.openx_agent_id, run.id); if (job.status === 'queued') void auditorService.processDreamAudit(job.id); } };
+const queueDreamAudit = (run: DreamRun | undefined): void => { if (run && (run.status === 'completed' || run.status === 'failed')) { enqueueKnowledge(run.openx_agent_id, { source_type: 'dream_run', source_id: run.id, payload: run }); const job = auditorService.queueDreamAudit(run.openx_agent_id, run.id); if (job.status === 'queued') void auditorService.processDreamAudit(job.id); } };
 
 const respondMcpError = (res: Response, error: unknown): void => {
   if (error instanceof McpError) { res.status(error.status === 402 ? 402 : error.status >= 400 ? error.status : 502).json({ ok: false, ...(typeof error.data === 'object' && error.data ? error.data as object : { error: 'hypermove_error', message: String(error.data) }) }); return; }
@@ -187,11 +190,47 @@ const hasDreamCredentialAuthority = (req: Request, agentId: string): boolean => 
   const agentKey = agentKeyFor(req);
   return Boolean(agentKey && agentRegistry.authorizeTelemetry(agentId, agentKey)) || Boolean(adminToken && req.headers.authorization === `Bearer ${adminToken}`);
 };
+const hasArchiveAdminAuthority = (req: Request): boolean => {
+  const adminToken = process.env.OPENX_DREAM_CREDENTIAL_ADMIN_TOKEN;
+  return Boolean(adminToken && req.headers.authorization === `Bearer ${adminToken}`);
+};
 const dreamReconciliationTimers = new Set<string>();
 const dreamTerminalStatus = (value: unknown): 'completed' | 'failed' | undefined => {
   if (value === 'completed' || value === 'partial') return 'completed';
   if (value === 'failed' || value === 'error') return 'failed';
   return undefined;
+};
+const hasCompletedDreamEvidence = (result: unknown): boolean => {
+  const data = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  return dreamTerminalStatus(data.status) === 'completed'
+    || Boolean(data.stage_summaries)
+    || typeof data.memories_count === 'number';
+};
+const dreamResultFingerprint = (agentId: string, hypermoveAgentId: string, result: unknown): string => {
+  const data = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  const stableEvidence = {
+    agent_id: agentId,
+    hypermove_agent_id: hypermoveAgentId,
+    run_id: typeof data.run_id === 'string' ? data.run_id : null,
+    status: typeof data.status === 'string' ? data.status : null,
+    stage_summaries: data.stage_summaries ?? null,
+    memories_count: typeof data.memories_count === 'number' ? data.memories_count : null,
+    daily_digest: typeof data.daily_digest === 'string' ? data.daily_digest : null,
+    morning_brief: typeof data.morning_brief === 'string' ? data.morning_brief : null,
+  };
+  return createHash('sha256').update(JSON.stringify(stableEvidence)).digest('hex');
+};
+const syncCompletedDreamRun = async (agentId: string): Promise<{ run: DreamRun; imported: boolean }> => {
+  const link = dreamState.getLink(agentId);
+  if (!link) throw new McpError(409, { error: 'dream_not_linked', message: 'Link this agent to HyperMove before syncing Dream data' });
+  const result = await hyperMove.call('get_dream_stats', { agent_id: link.hypermove_agent_id }, mcpTokenFor(agentId));
+  if (!hasCompletedDreamEvidence(result)) {
+    throw new McpError(409, { error: 'upstream_completion_not_available', message: 'HyperMove has not reported a completed Dream result for this agent yet' });
+  }
+  const imported = dreamState.importCompletedRun(agentId, link, result, learningBriefFrom(result), dreamResultFingerprint(agentId, link.hypermove_agent_id, result));
+  persistDreamLessons(agentId, imported.run.id, result);
+  if (imported.created) queueDreamAudit(imported.run);
+  return { run: imported.run, imported: imported.created };
 };
 const reconcileDreamRun = async (run: DreamRun): Promise<DreamRun | undefined> => {
   if (run.status !== 'running') return run;
@@ -207,7 +246,7 @@ const reconcileDreamRun = async (run: DreamRun): Promise<DreamRun | undefined> =
     if (terminal === 'failed') {
       const updated = dreamState.updateRun(run.id, { status: 'failed', completed_at: checkedAt, result, error: typeof result?.error === 'string' ? result.error : 'HyperMove Dream run failed', reconciliation: { last_checked_at: checkedAt, upstream_status: upstreamStatus } }); queueDreamAudit(updated); return updated;
     }
-    if (result && typeof result === 'object' && (result.stage_summaries || typeof result.memories_count === 'number')) {
+    if (hasCompletedDreamEvidence(result)) {
       persistDreamLessons(run.openx_agent_id, run.id, result);
       const updated = dreamState.updateRun(run.id, { status: 'completed', completed_at: checkedAt, result, learning_brief: learningBriefFrom(result), reconciliation: { last_checked_at: checkedAt, upstream_status: 'completed' } }); queueDreamAudit(updated); return updated;
     }
@@ -246,6 +285,51 @@ const projectSkills = (agentId: string) => {
   return [...candidates, ...capabilities];
 };
 
+/** Public, intentionally minimal data contracts for browser-local WebMCP tools. */
+const webMcpAgent = (agent: ReturnType<typeof agentRegistry.get>) => agent && ({
+  agent_id: agent.agent_id, display_name: agent.display_name, slug: agent.slug,
+  description: agent.description, model: agent.model, capabilities: agent.capabilities,
+  host_type: agent.host_type, state: agent.state, registered_at: agent.registered_at,
+  last_seen_at: agent.last_seen_at,
+});
+const webMcpActivity = (agentId: string) => {
+  const activity = agentIngestionStore.getTaskActivity(agentId);
+  const project = (task: typeof activity.current_task) => task && ({ task_id: task.task_id, state: task.state, title: task.title, phase: task.phase, progress_pct: task.progress_pct, model: task.model, tools_used: task.tools_used, last_heartbeat_at: task.last_heartbeat_at });
+  return { current_task: project(activity.current_task), latest_task: project(activity.latest_task) };
+};
+const webMcpDream = (agentId: string) => {
+  const link = dreamState.getLink(agentId);
+  const run = dreamState.latestRun(agentId);
+  return { linked: Boolean(link), hypermove_agent_id: link?.hypermove_agent_id || null, latest_run: run ? { id: run.id, status: run.status, completed_at: run.completed_at || null, source: run.source || 'gateway', learning_brief: run.learning_brief } : null };
+};
+const webMcpAuditor = (agentId: string) => {
+  auditorService.ensureAgentWorkspace(agentId);
+  const jobs = auditorService.listDreamJobs(agentId);
+  const latest = jobs[0];
+  const workspace = latest ? auditorService.workspace(agentId, latest.id) : undefined;
+  return { latest_job: latest ? { id: latest.id, status: latest.status, dream_run_id: latest.dream_run_id, created_at: latest.created_at, updated_at: latest.updated_at } : null, reviewed_lessons: workspace?.lessons.map((lesson) => ({ id: lesson.id, state: lesson.state, source: lesson.source, created_at: lesson.created_at })) || [], evidence: workspace?.evidence || null };
+};
+const webMcpConnectionPrompt = (agentId: string, agentKey: string | undefined): string => [
+  'Connect this agent to OpenX Gateway and keep the issued identity for all future syncs.',
+  `OPENX_AGENT_ID=${agentId}`,
+  ...(agentKey ? [`OPENX_AGENT_KEY=${agentKey}`] : []),
+  `OPENX_GATEWAY_URL=${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}`,
+  'Send authenticated POST /v1/agent/sync heartbeats and POST /v1/agent/telemetry task lifecycle updates. Do not register again when these values already exist.',
+].join('\n');
+const registerWebMcpAgent = (req: Request, res: Response): void => {
+  const parsed = AgentRegisterSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload', message: parsed.error.errors.map((error) => `${error.path.join('.')}: ${error.message}`).join(', ') }); return; }
+  try {
+    const result = agentRegistry.register(parsed.data);
+    auditorService.ensureAgentWorkspace(result.agent.agent_id);
+    const knowledge_sync = syncConnectedAgentKnowledge(result.agent.agent_id);
+    res.status(result.created ? 201 : 200).json({ ok: true, status: result.created ? 'registered' : 'restored', agent: webMcpAgent(result.agent), knowledge_sync, credential: result.credential ? { agent_key: result.credential, shown_once: true } : undefined, connection_prompt: webMcpConnectionPrompt(result.agent.agent_id, result.credential), telemetry_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/telemetry` });
+  } catch (error) {
+    if (error instanceof AgentRegistryError) { res.status(error.status).json({ ok: false, error: error.code, message: error.code.replace(/_/g, ' ') }); return; }
+    res.status(500).json({ ok: false, error: 'internal_error', message: 'Unable to register agent' });
+  }
+};
+
 const runDailyAudits = (): void => {
   for (const agent of agentRegistry.list()) auditorService.audit(agent.agent_id, 'daily');
 };
@@ -268,6 +352,7 @@ app.get('/health', (_req: Request, res: Response) => {
     service: 'openx-deep-research-analyst-gateway',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
+    knowledge_storage: agentKnowledgeArchive.health(),
     ...agentRegistry.health(),
   });
 });
@@ -283,6 +368,25 @@ const canReadUsageSummary = (req: Request, agentId?: string): boolean => {
   return Boolean(configuredReadToken && authorization === `Bearer ${configuredReadToken}`);
 };
 
+/** Builds a complete, idempotent local snapshot when an agent is connected or restored. */
+const syncConnectedAgentKnowledge = (agentId: string) => {
+  const agent = agentRegistry.get(agentId);
+  if (!agent) return undefined;
+  const inputs: KnowledgeInput[] = [{ source_type: 'agent_profile', source_id: agent.agent_id, payload: agent }];
+  for (const item of agentIngestionStore.getTelemetry(agentId, 100)) inputs.push({ source_type: 'telemetry', source_id: item.id, payload: item });
+  for (const item of agentIngestionStore.getMemoryEpisodes(agentId)) inputs.push({ source_type: 'memory_episode', source_id: item.id, payload: item });
+  for (const item of agentIngestionStore.getCandidateSkills(agentId)) inputs.push({ source_type: 'skill_metadata', source_id: item.id, payload: item });
+  for (const item of dreamState.listRuns(agentId)) inputs.push({ source_type: 'dream_run', source_id: item.id, payload: item });
+  for (const item of dreamState.listLessons(agentId)) inputs.push({ source_type: 'lesson', source_id: item.id, payload: item });
+  for (const item of auditorService.list(agentId, 100)) inputs.push({ source_type: 'audit', source_id: item.id, payload: item });
+  try { inputs.push({ source_type: 'usage_summary', source_id: new Date().toISOString().slice(0, 7), payload: usageLedger.summary(agentId) }); } catch { /* Production usage configuration is independent of archive sync. */ }
+  return agentKnowledgeArchive.sync(agentId, inputs);
+};
+const enqueueKnowledge = (agentId: string, input: KnowledgeInput): void => {
+  agentKnowledgeArchive.enqueue(agentId, input);
+  void agentKnowledgeArchive.processPending(agentId);
+};
+
 app.post('/v1/agent/register', (req: Request, res: Response): void => {
   const parsed = AgentRegisterSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -293,10 +397,12 @@ app.post('/v1/agent/register', (req: Request, res: Response): void => {
     const credential = req.headers['x-agent-key'];
     const result = agentRegistry.register(parsed.data, typeof credential === 'string' ? credential : undefined);
     auditorService.ensureAgentWorkspace(result.agent.agent_id);
+    const knowledge_sync = syncConnectedAgentKnowledge(result.agent.agent_id);
     res.status(result.created ? 201 : 200).json({
       ok: true,
       status: 'registered',
       agent: result.agent,
+      knowledge_sync,
       ...(result.credential ? { credential: { agent_key: result.credential, shown_once: true } } : {}),
       telemetry_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/telemetry`,
     });
@@ -316,7 +422,8 @@ app.post('/v1/agent/claim', (req: Request, res: Response): void => {
   try {
     const agent = agentRegistry.claim(parsed.data.agent_id, parsed.data.agent_key);
     auditorService.ensureAgentWorkspace(agent.agent_id);
-    res.json({ ok: true, agent, sync_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/sync` });
+    const knowledge_sync = syncConnectedAgentKnowledge(agent.agent_id);
+    res.json({ ok: true, agent, knowledge_sync, sync_endpoint: `${(process.env.OPENX_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '')}/v1/agent/sync` });
   } catch (error) {
     if (error instanceof AgentRegistryError) { res.status(error.status).json({ ok: false, error: error.code }); return; }
     res.status(500).json({ ok: false, error: 'internal_error' });
@@ -353,12 +460,84 @@ app.get('/v1/agents/overview', (_req: Request, res: Response): void => {
     return {
       agent,
       connection: { state: agent.state, last_seen_at: agent.last_seen_at },
-      dream: { linked: Boolean(link), hypermove_agent_id: link?.hypermove_agent_id || null },
+      dream: (() => {
+        const run = dreamState.latestRun(agent.agent_id);
+        return {
+          linked: Boolean(link),
+          hypermove_agent_id: link?.hypermove_agent_id || null,
+          ...(run ? { latest_run: { id: run.id, status: run.status, completed_at: run.completed_at || null, source: run.source || 'gateway', learning_brief: run.learning_brief } } : {}),
+        };
+      })(),
       activity: agentIngestionStore.getTaskActivity(agent.agent_id),
       audit: { ready: jobs.some((job) => job.dream_run_id === `agent:${agent.agent_id}`), job_count: jobs.length },
+      knowledge_sync: agentKnowledgeArchive.status(agent.agent_id),
     };
   });
   res.json({ ok: true, agents: overview, summary: { registered: overview.length, online: overview.filter((item) => item.connection.state === 'online').length, linked: overview.filter((item) => item.dream.linked).length, auditor_ready: overview.filter((item) => item.audit.ready).length } });
+});
+
+/**
+ * WebMCP is browser-local tool registration, not a second control plane. These
+ * endpoints are the intentionally public, reduced projections selected for the
+ * GPT integration. Existing authenticated agent-host endpoints stay unchanged.
+ */
+app.get('/v1/webmcp/agents', (_req: Request, res: Response): void => {
+  const agents = agentRegistry.list().map(webMcpAgent).filter(Boolean);
+  res.json({ ok: true, agents, summary: { registered: agents.length, online: agents.filter((agent) => agent?.state === 'online').length } });
+});
+app.post('/v1/webmcp/agents', registerWebMcpAgent);
+app.get('/v1/webmcp/agents/:agentId', (req: Request, res: Response): void => {
+  const agent = agentRegistry.get(req.params.agentId);
+  if (!agent) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, agent: webMcpAgent(agent), activity: webMcpActivity(agent.agent_id), dream: webMcpDream(agent.agent_id), knowledge_sync: agentKnowledgeArchive.status(agent.agent_id) });
+});
+app.get('/v1/webmcp/agents/:agentId/skills', (req: Request, res: Response): void => {
+  const skills = projectSkills(req.params.agentId);
+  if (!skills) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, skills: skills.map(({ id, name, slug, description, status, version, trigger_patterns, telemetry }) => ({ id, name, slug, description, status, version, trigger_patterns, telemetry })) });
+});
+app.post('/v1/webmcp/agents/:agentId/skills/:skillId/status', (req: Request, res: Response): void => {
+  const parsed = SkillStatusSchema.safeParse(req.body);
+  const skill = projectSkills(req.params.agentId)?.find((item) => item.id === req.params.skillId);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; }
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  if (!skill) { res.status(404).json({ ok: false, error: 'skill_not_found' }); return; }
+  agentIngestionStore.setSkillStatus(req.params.agentId, req.params.skillId, parsed.data.status as SkillLifecycleStatus);
+  res.json({ ok: true, skill: { id: skill.id, name: skill.name, status: parsed.data.status } });
+});
+app.get('/v1/webmcp/agents/:agentId/wallet', async (req: Request, res: Response): Promise<void> => {
+  const agent = agentRegistry.get(req.params.agentId);
+  if (!agent) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  const wallet = await statusWalletService.snapshot(agent.wallet_address || agent.owner_address);
+  res.json({ ok: true, wallet: { address: wallet.address, chain_id: wallet.chain_id, network: wallet.network, native_balance_wei: wallet.native_balance_wei, tokens: wallet.tokens, fetched_at: wallet.fetched_at, source_errors: wallet.source_errors } });
+});
+app.get('/v1/webmcp/agents/:agentId/dream', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, dream: webMcpDream(req.params.agentId) });
+});
+app.post('/v1/webmcp/agents/:agentId/dream/trigger', (req: Request, res: Response): void => {
+  // The canonical handler preserves payment, idempotency, and reconciliation semantics.
+  req.url = `/v1/agents/${encodeURIComponent(req.params.agentId)}/dream/trigger`;
+  (app as unknown as { handle: (request: Request, response: Response) => void }).handle(req, res);
+});
+app.get('/v1/webmcp/agents/:agentId/auditor', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, auditor: webMcpAuditor(req.params.agentId) });
+});
+app.post('/v1/webmcp/agents/:agentId/auditor/chat', async (req: Request, res: Response): Promise<void> => {
+  const parsed = AuditorChatSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; }
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  const latest = auditorService.listDreamJobs(req.params.agentId)[0];
+  if (!latest) { res.status(409).json({ ok: false, error: 'audit_unavailable' }); return; }
+  try {
+    const result = await auditorService.chat(req.params.agentId, latest.id, parsed.data.message, parsed.data.client_request_id, req.ip || 'unknown');
+    if (result.error === 'not_found') { res.status(404).json({ ok: false, error: 'audit_not_found' }); return; }
+    if (result.error === 'rate_limited') { res.status(429).json({ ok: false, error: 'chat_rate_limited' }); return; }
+    if (result.error === 'no_evidence') { res.status(409).json({ ok: false, error: 'audit_evidence_unavailable' }); return; }
+    if (result.error === 'not_configured') { res.status(503).json({ ok: false, error: 'auditor_chat_unavailable' }); return; }
+    res.status(201).json({ ok: true, audit_job_id: latest.id, turn: result.turn });
+  } catch { res.status(502).json({ ok: false, error: 'auditor_chat_unavailable' }); }
 });
 
 /** Agent-owned periodic sync. No gateway-initiated connection to agent hosts. */
@@ -382,7 +561,29 @@ app.get('/v1/agents/:agentId', (req: Request, res: Response): void => {
     res.status(404).json({ ok: false, error: 'agent_not_found', message: 'Agent is not registered' });
     return;
   }
-  res.json({ ok: true, agent, activity: agentIngestionStore.getLiveAgentDelta(agent.agent_id), task_activity: agentIngestionStore.getTaskActivity(agent.agent_id) });
+  res.json({ ok: true, agent, activity: agentIngestionStore.getLiveAgentDelta(agent.agent_id), task_activity: agentIngestionStore.getTaskActivity(agent.agent_id), knowledge_sync: agentKnowledgeArchive.status(agent.agent_id) });
+});
+
+app.get('/v1/agents/:agentId/knowledge-sync', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, sync: agentKnowledgeArchive.status(req.params.agentId), storage: agentKnowledgeArchive.health() });
+});
+
+app.post('/v1/agents/:agentId/knowledge-sync', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; }
+  res.status(202).json({ ok: true, sync: syncConnectedAgentKnowledge(req.params.agentId) });
+});
+
+app.post('/v1/admin/knowledge-sync', async (req: Request, res: Response): Promise<void> => {
+  if (!hasArchiveAdminAuthority(req)) { res.status(401).json({ ok: false, error: 'admin_authorization_required' }); return; }
+  if (agentKnowledgeArchive.health().state !== 'ready') { res.status(409).json({ ok: false, error: 'knowledge_storage_not_ready', storage: agentKnowledgeArchive.health() }); return; }
+  const agents = agentRegistry.list();
+  const retried_records = agentKnowledgeArchive.retryPending();
+  for (const agent of agents) syncConnectedAgentKnowledge(agent.agent_id);
+  await agentKnowledgeArchive.flush();
+  const results = agents.map((agent) => ({ agent_id: agent.agent_id, display_name: agent.display_name, sync: agentKnowledgeArchive.status(agent.agent_id), records: agentKnowledgeArchive.records(agent.agent_id) }));
+  res.json({ ok: true, message: 'All connected-agent data was sanitized and published to 0G Storage.', storage: agentKnowledgeArchive.health(), agent_count: results.length, retried_records, results });
 });
 
 app.get('/v1/agents/:agentId/activity', (req: Request, res: Response): void => {
@@ -548,8 +749,26 @@ app.get('/v1/agents/:agentId/dream', (req: Request, res: Response): void => {
 app.post('/v1/agents/:agentId/dream/reconcile', async (req: Request, res: Response): Promise<void> => {
   if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
   const run = dreamState.latestRun(req.params.agentId);
-  if (!run) { res.status(404).json({ ok: false, error: 'dream_run_not_found' }); return; }
-  res.json({ ok: true, run: await reconcileDreamRun(run) });
+  if (run?.status === 'running') { res.json({ ok: true, run: await reconcileDreamRun(run), imported: false }); return; }
+  try {
+    const synced = await syncCompletedDreamRun(req.params.agentId);
+    res.json({ ok: true, run: synced.run, imported: synced.imported });
+  } catch (error) {
+    if (run) {
+      const message = error instanceof Error ? error.message : 'Unable to sync Dream status';
+      res.json({ ok: true, run: dreamState.updateRun(run.id, { reconciliation: { last_checked_at: new Date().toISOString(), last_error: message } }), imported: false });
+      return;
+    }
+    respondMcpError(res, error);
+  }
+});
+
+app.post('/v1/agents/:agentId/dream/sync', async (req: Request, res: Response): Promise<void> => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  try {
+    const synced = await syncCompletedDreamRun(req.params.agentId);
+    res.json({ ok: true, run: synced.run, imported: synced.imported });
+  } catch (error) { respondMcpError(res, error); }
 });
 
 app.post('/v1/agents/:agentId/dream/trigger', async (req: Request, res: Response): Promise<void> => {
@@ -652,8 +871,8 @@ app.get('/v1/agents/:agentId/wake', async (req: Request, res: Response): Promise
 });
 
 app.get('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => { res.json({ ok: true, lessons: dreamState.listLessons(req.params.agentId) }); });
-app.post('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => { const parsed = LessonSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } res.status(201).json({ ok: true, lesson: dreamState.addLesson(req.params.agentId, parsed.data.content, parsed.data.source) }); });
-app.post('/v1/agents/:agentId/lessons/:lessonId/resolve', (req: Request, res: Response): void => { const parsed = LessonResolutionSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.resolveLesson(req.params.agentId, req.params.lessonId, parsed.data.action); if (!lesson) { res.status(404).json({ ok: false, error: 'lesson_not_found' }); return; } res.json({ ok: true, lesson }); });
+app.post('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => { const parsed = LessonSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.addLesson(req.params.agentId, parsed.data.content, parsed.data.source); enqueueKnowledge(req.params.agentId, { source_type: 'lesson', source_id: lesson.id, payload: lesson }); res.status(201).json({ ok: true, lesson }); });
+app.post('/v1/agents/:agentId/lessons/:lessonId/resolve', (req: Request, res: Response): void => { const parsed = LessonResolutionSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.resolveLesson(req.params.agentId, req.params.lessonId, parsed.data.action); if (!lesson) { res.status(404).json({ ok: false, error: 'lesson_not_found' }); return; } enqueueKnowledge(req.params.agentId, { source_type: 'lesson', source_id: lesson.id, payload: lesson }); res.json({ ok: true, lesson }); });
 
 /**
  * PRD 001: GET /v1/agent/status
@@ -734,6 +953,7 @@ app.post('/v1/agent/telemetry', (req: Request, res: Response): void => {
     throw error;
   }
   const stored = agentIngestionStore.recordTelemetry(parseResult.data);
+  enqueueKnowledge(stored.agent_id, { source_type: 'telemetry', source_id: stored.id, payload: stored });
   if (parseResult.data.task_state === 'completed' || parseResult.data.task_state === 'failed') auditorService.audit(stored.agent_id, 'terminal_task');
   res.status(201).json({
     ok: true,
@@ -757,6 +977,7 @@ app.post('/v1/agent/usage-events', (req: Request, res: Response): void => {
   try {
     agentRegistry.recordHeartbeat(parsed.data.agent_id, { capabilities: [...parsed.data.tool_calls.map((call) => call.tool_id), ...parsed.data.skill_invocations.map((skill) => skill.skill_id)] });
     const result = usageLedger.record(parsed.data);
+    if (result.created) enqueueKnowledge(result.event.agent_id, { source_type: 'usage_summary', source_id: result.event.event_id, payload: result.event });
     res.status(result.created ? 201 : 200).json({ ok: true, created: result.created, event_id: result.event.event_id, agent_id: result.event.agent_id, received_at: result.event.received_at });
   } catch (error) {
     if (error instanceof AgentRegistryError) { res.status(error.status).json({ ok: false, error: error.code }); return; }
@@ -800,6 +1021,7 @@ app.post('/v1/agent/memory/episode', (req: Request, res: Response): void => {
   }
 
   const stored = agentIngestionStore.recordMemoryEpisode(parseResult.data);
+  enqueueKnowledge(stored.agent_id, { source_type: 'memory_episode', source_id: stored.id, payload: stored });
   res.status(201).json({
     ok: true,
     event_type: 'memory_episode',
@@ -825,6 +1047,7 @@ app.post('/v1/agent/skills/candidate', (req: Request, res: Response): void => {
   }
 
   const stored = agentIngestionStore.recordCandidateSkill(parseResult.data);
+  enqueueKnowledge(stored.agent_id, { source_type: 'skill_metadata', source_id: stored.id, payload: stored });
   res.status(201).json({
     ok: true,
     event_type: 'skill_candidate',

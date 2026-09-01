@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { PortalProvider } from '@/lib/portalContext';
 import { Toast } from '@/components/common/Toast';
+import { WebMcpProvider } from '@/lib/webmcp/WebMcpProvider';
 import { OpenXLogo } from '@/components/common/OpenXLogo';
 import { HeaderWallet } from './HeaderWallet';
 import { Providers } from './providers';
@@ -41,7 +42,7 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-background text-on-surface flex flex-col min-h-screen transition-colors duration-200">
-        <Providers><PortalProvider>
+        <Providers><PortalProvider><WebMcpProvider>
           {/* Top Global Agent Portal Nav Header */}
           <header className="sticky top-0 z-40 border-b border-outline-variant/40 bg-surface/85 backdrop-blur-md transition-colors duration-200">
             <div className="mx-auto grid h-16 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 sm:px-6 lg:px-8">
@@ -82,7 +83,7 @@ export default function RootLayout({
               </div>
             </div>
           </footer>
-        </PortalProvider></Providers>
+        </WebMcpProvider></PortalProvider></Providers>
       </body>
     </html>
   );
