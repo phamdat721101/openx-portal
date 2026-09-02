@@ -73,5 +73,26 @@ describe('Gateway Core Backend Server (PRD 001 Tests)', () => {
       expect(res.body.status).toBeDefined();
       expect(res.body.info).toBeUndefined();
     });
+
+    it('aggregates dreamState memories and lessons into the memory domain', async () => {
+      const { dreamState } = await import('../src/services/dreamGateway.js');
+      const agentId = 'dream-status-test-agent';
+      const link = dreamState.link(agentId, agentId);
+      const run = dreamState.createRun(agentId, link, 'balanced', 0.1);
+      dreamState.updateRun(run.id, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        result: { memories_count: 12 },
+        learning_brief: { generated_at: new Date().toISOString(), constraints_count: 2 },
+      });
+      dreamState.addLesson(agentId, 'Consolidated memory lesson test', 'dream_cycle', run.id);
+
+      const res = await request(app).get(`/v1/agent/status?agentId=${agentId}&fields=memory`);
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.memory).toBeDefined();
+      expect(res.body.memory.episodes).toBeGreaterThanOrEqual(12);
+      expect(res.body.memory.facts).toBeGreaterThanOrEqual(1);
+    });
   });
 });

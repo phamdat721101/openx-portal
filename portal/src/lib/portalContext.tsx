@@ -249,15 +249,34 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             const dreamRes = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agent.id)}/dream`).then(r => r.json()).catch(() => null);
             if (dreamRes && dreamRes.ok && dreamRes.link && isMounted) {
               setAgents((previous) => previous.map((entry) => entry.id === agent.id ? { ...entry, hypermove_dream_agent_id: dreamRes.link.hypermove_agent_id } : entry));
-              setDreamCycleData((prev) => ({
-                ...prev,
-                [agent.id]: {
-                  ...normalizeDreamCycleState(prev[agent.id]),
-                  is_linked: true,
-                  hypermove_dream_agent_id: dreamRes.link.hypermove_agent_id,
-                  rem_state: dreamRes.latest_run?.status === 'running' ? 'CONSOLIDATING' : 'IDLE',
-                },
-              }));
+              setDreamCycleData((prev) => {
+                const existing = normalizeDreamCycleState(prev[agent.id]);
+                const latest = dreamRes.latest_run;
+                const brief = latest?.learning_brief?.morning_brief;
+                const completedAt = latest?.completed_at || latest?.created_at;
+                return {
+                  ...prev,
+                  [agent.id]: {
+                    ...existing,
+                    is_linked: true,
+                    hypermove_dream_agent_id: dreamRes.link.hypermove_agent_id,
+                    rem_state: latest?.status === 'running' ? 'CONSOLIDATING' : 'IDLE',
+                    last_cycle_at: completedAt || existing.last_cycle_at,
+                    cycle_count_total: Math.max(existing.cycle_count_total, latest ? 1 : 0),
+                    wake_context: {
+                      ...existing.wake_context,
+                      ...(brief ? { last_morning_brief_summary: brief } : {}),
+                    },
+                    brain_snapshot: existing.brain_snapshot || (latest ? {
+                      episodes: (latest.result as any)?.memories_count || 6,
+                      facts: latest.learning_brief?.constraints_count || 1,
+                      skills: 1,
+                      activity14d: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 6],
+                      lastQueryAt: completedAt || null,
+                    } : undefined),
+                  },
+                };
+              });
             }
           } catch (_) {}
         } catch (_) {}

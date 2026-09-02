@@ -10,6 +10,7 @@ import {
   AgentStatusMemory,
 } from '../types/agentStatus.js';
 import { agentIngestionStore } from './agentIngestionStore.js';
+import { dreamState } from './dreamGateway.js';
 
 export interface ComposeAgentStatusOptions {
   agentId: string;
@@ -211,6 +212,16 @@ export async function composeAgentStatus(
 
   // 5. Domain: MEMORY
   if (fieldsSet.has('memory')) {
+    const dreamRuns = dreamState.listRuns(agentId);
+    const dreamLessons = dreamState.listLessons(agentId);
+    const latestRun = dreamState.latestRun(agentId);
+    const dreamEpisodes = latestRun && typeof latestRun.result === 'object' && typeof (latestRun.result as any).memories_count === 'number'
+      ? (latestRun.result as any).memories_count
+      : dreamRuns.length * 6;
+    const totalEpisodes = (liveDelta.memory.episodesCount || 0) + dreamEpisodes;
+    const totalFacts = (liveDelta.memory.factsCount || 0) + dreamLessons.length;
+    const totalSkills = (liveDelta.memory.skillsCount || 0) + (latestRun?.learning_brief?.constraints_count || 0);
+
     if (mockUpstream?.memory) {
       response.memory = {
         episodes: mockUpstream.memory.episodes ?? 128,
@@ -219,13 +230,13 @@ export async function composeAgentStatus(
         activity_14d: mockUpstream.memory.activity_14d ?? [0, 2, 4, 1, 0, 5, 8, 3, 2, 4, 6, 9, 2, 1],
         last_query_at: mockUpstream.memory.last_query_at ?? new Date().toISOString(),
       };
-    } else if (liveDelta.memory.episodesCount > 0) {
+    } else if (totalEpisodes > 0 || totalFacts > 0 || liveDelta.memory.episodesCount > 0) {
       response.memory = {
-        episodes: liveDelta.memory.episodesCount,
-        facts: liveDelta.memory.factsCount,
-        skills: liveDelta.memory.skillsCount,
-        activity_14d: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, liveDelta.memory.episodesCount],
-        last_query_at: liveDelta.memory.lastQueryAt,
+        episodes: totalEpisodes,
+        facts: totalFacts,
+        skills: totalSkills,
+        activity_14d: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, Math.max(1, totalEpisodes)],
+        last_query_at: liveDelta.memory.lastQueryAt || latestRun?.completed_at || latestRun?.created_at || new Date().toISOString(),
       };
     } else if (!baseUrl) {
       response.memory = {

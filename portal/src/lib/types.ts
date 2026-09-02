@@ -91,4 +91,11 @@ export interface DreamCycleState {
   }>;
   diagnostics: DreamEpisodeDiagnostic[];
   skillify_candidates: PromotedDreamSkill[];
+  brain_snapshot?: {
+    episodes: number;
+    facts: number;
+    skills: number;
+    activity14d: number[];
+    lastQueryAt: string | null;
+  };
 }

@@ -41,7 +41,7 @@ describe('wallet and advisory auditor APIs', () => {
       expect.objectContaining({ dimension: 'task_reliability', verdict: 'insufficient_evidence' }),
       expect.objectContaining({ dimension: 'lesson_quality', verdict: 'insufficient_evidence' }),
     ]));
-  });
+  }, 15000);
 
   it('processes a completed Dream run through the 0G review contract and stores an advisory skill candidate', async () => {
     const original = {

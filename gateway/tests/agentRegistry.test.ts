@@ -14,4 +14,15 @@ describe('Agent registry', () => {
     expect(second.created).toBe(false);
     expect(second.credential).toBeUndefined();
   });
+
+  it('reuses existing registration in development mode when agent_id is omitted to prevent duplicates', () => {
+    const registry = new AgentRegistry({ mode: 'development' });
+    const first = registry.register({ display_name: 'Antigravity BD Agent', host_type: 'custom' });
+    const second = registry.register({ display_name: 'Antigravity BD Agent', host_type: 'custom' });
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.agent.agent_id).toBe(first.agent.agent_id);
+    expect(second.agent.slug).toBe(first.agent.slug);
+  });
 });

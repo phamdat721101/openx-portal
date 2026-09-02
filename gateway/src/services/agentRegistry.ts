@@ -93,8 +93,32 @@ export class AgentRegistry {
 
   public register(input: AgentRegistrationInput, existingCredential?: string): { agent: AgentProjection; credential?: string; created: boolean } {
     this.assertAvailable();
-    const agentId = input.agent_id || randomUUID();
-    const existing = this.records.get(agentId);
+    let agentId = input.agent_id;
+    let existing = agentId ? this.records.get(agentId) : undefined;
+
+    // If no agent_id provided, look up by existingCredential hash
+    if (!existing && existingCredential) {
+      const byCred = Array.from(this.records.values()).find((rec) => verifyCredential(existingCredential, rec.credential_hash));
+      if (byCred) {
+        existing = byCred;
+        agentId = byCred.agent_id;
+      }
+    }
+
+    // In development mode or matching slug/name with same host_type, resolve existing agent to avoid duplicates
+    if (!existing && !input.agent_id && this.mode === 'development') {
+      const matchSlug = (input.slug || input.display_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const found = Array.from(this.records.values()).find((rec) =>
+        (rec.slug === matchSlug || rec.display_name.trim().toLowerCase() === input.display_name.trim().toLowerCase()) &&
+        rec.host_type === input.host_type &&
+        (!input.owner_address || rec.owner_address === input.owner_address)
+      );
+      if (found) {
+        existing = found;
+        agentId = found.agent_id;
+      }
+    }
+
     if (existing) {
       if (this.mode === 'production' && !verifyCredential(existingCredential || '', existing.credential_hash)) {
         throw new AgentRegistryError('agent_already_registered', 409);
@@ -104,6 +128,7 @@ export class AgentRegistry {
       return { agent: this.project(existing), created: false };
     }
 
+    agentId = agentId || randomUUID();
     const agent: RegisteredAgent = {
       agent_id: agentId,
       slug: this.uniqueSlug(input.slug || input.display_name),
