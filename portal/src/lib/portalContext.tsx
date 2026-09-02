@@ -39,6 +39,8 @@ import {
   updateGatewaySkillStatus,
 } from './api/agentGateway';
 
+export const PORTAL_LIVE_REFRESH_EVENT = 'openx:refresh-live-data';
+
 interface PortalContextType {
   agents: StudioAgent[];
   getAgentById: (id: string) => StudioAgent | undefined;
@@ -262,10 +264,13 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
+    const refreshFromWebMcp = () => { void syncLiveTelemetry(); };
+    window.addEventListener(PORTAL_LIVE_REFRESH_EVENT, refreshFromWebMcp);
     syncLiveTelemetry();
     const interval = setInterval(syncLiveTelemetry, 5000);
     return () => {
       isMounted = false;
+      window.removeEventListener(PORTAL_LIVE_REFRESH_EVENT, refreshFromWebMcp);
       clearInterval(interval);
     };
   }, []);

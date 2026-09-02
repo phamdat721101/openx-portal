@@ -1,30 +1,30 @@
 'use client';
 
 import React from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
   webMcpAgentOverview, webMcpAskAuditor, webMcpAuditor, webMcpConnectAgent,
   webMcpDream, webMcpFleet, webMcpSetSkillStatus, webMcpSkills,
   webMcpTriggerDream, webMcpWallet, WebMcpSection,
 } from '@/lib/api/agentGateway';
+import { PORTAL_LIVE_REFRESH_EVENT } from '@/lib/portalContext';
 
-type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; execute: (input: Record<string, unknown>) => Promise<unknown> };
-type ModelContext = { registerTool: (tool: Tool) => void };
+type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint: boolean }; execute: (input: Record<string, unknown>) => Promise<unknown> };
+type ModelContext = { registerTool: (tool: Tool) => void | Promise<void> };
 type ModelDocument = Document & { modelContext?: ModelContext };
 
 const noInput = { type: 'object', additionalProperties: false, properties: {} };
 const sectionPath = (agentId: string, section: WebMcpSection) => section === 'studio' ? '/' : `/${encodeURIComponent(agentId)}/${section}`;
-const uuidFromPath = (pathname: string): string | undefined => {
-  const candidate = pathname.split('/').filter(Boolean)[0];
-  return candidate && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(candidate) ? candidate : undefined;
-};
 const requestId = () => `webmcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const agentIdSchema = { type: 'string', minLength: 1, maxLength: 120, description: 'OpenX agent identifier.' };
+const writeToolNames = new Set(['openx_register_agent', 'openx_navigate_portal_section', 'openx_set_skill_status', 'openx_trigger_dream_cycle', 'openx_ask_auditor']);
+const withAgentId = (properties: Record<string, unknown>, required: string[] = []) => ({
+  type: 'object', additionalProperties: false, required: ['agent_id', ...required], properties: { agent_id: agentIdSchema, ...properties },
+});
 
-/** Registers browser-local tools only when ChatGPT exposes the imperative WebMCP API. */
+/** Registers global browser-local OpenX tools only when ChatGPT exposes WebMCP. */
 export function WebMcpProvider({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const router = useRouter();
-  const agentId = uuidFromPath(pathname);
   const registered = React.useRef(new Set<string>());
   const [available, setAvailable] = React.useState(false);
 
@@ -35,23 +35,28 @@ export function WebMcpProvider({ children }: { children: React.ReactNode }) {
     if (!context) return;
     const register = (tool: Tool) => {
       if (registered.current.has(tool.name)) return;
-      context.registerTool(tool);
       registered.current.add(tool.name);
+      const registeredTool = { ...tool, annotations: { readOnlyHint: !writeToolNames.has(tool.name) } };
+      void Promise.resolve(context.registerTool(registeredTool)).catch(() => registered.current.delete(tool.name));
     };
-    register({ name: 'list_public_agents', description: 'List public OpenX Portal agent summaries and their current connection state.', inputSchema: noInput, execute: async () => webMcpFleet() });
-    register({ name: 'connect_agent', description: 'Create or restore an OpenX agent registration. This public action returns a one-time agent key in the chat transcript when a new identity is created.', inputSchema: { type: 'object', additionalProperties: false, required: ['display_name', 'host_type'], properties: { display_name: { type: 'string', minLength: 1, maxLength: 120 }, host_type: { type: 'string', enum: ['kiro-cli', 'claude-code', 'adk-python', 'custom'] }, description: { type: 'string', maxLength: 500 }, model: { type: 'string', maxLength: 120 }, capabilities: { type: 'array', items: { type: 'string' }, maxItems: 32 } } }, execute: async (input) => webMcpConnectAgent(input as unknown as Parameters<typeof webMcpConnectAgent>[0]) });
-    if (!agentId) return;
-    register({ name: 'get_agent_overview', description: 'Get this connected agent’s public profile, live task activity, Dream state, and knowledge-sync state.', inputSchema: noInput, execute: async () => webMcpAgentOverview(agentId) });
-    register({ name: 'track_working_process', description: 'Get the current or latest task process for this agent.', inputSchema: noInput, execute: async () => webMcpAgentOverview(agentId).then((result) => ({ ok: result.ok, activity: result.activity })) });
-    register({ name: 'list_agent_skills', description: 'List this agent’s reported capabilities and candidate skills.', inputSchema: noInput, execute: async () => webMcpSkills(agentId) });
-    register({ name: 'get_wallet_summary', description: 'Get the public Status Network wallet balance summary for this agent.', inputSchema: noInput, execute: async () => webMcpWallet(agentId) });
-    register({ name: 'get_dream_status', description: 'Get this agent’s Dream Cycle link and latest run summary.', inputSchema: noInput, execute: async () => webMcpDream(agentId) });
-    register({ name: 'get_auditor_summary', description: 'Get evidence-only auditor status and reviewed-lesson summary for this agent.', inputSchema: noInput, execute: async () => webMcpAuditor(agentId) });
-    register({ name: 'navigate_portal_section', description: 'Open a section of this agent in the visible OpenX Portal.', inputSchema: { type: 'object', additionalProperties: false, required: ['section'], properties: { section: { type: 'string', enum: ['studio', 'skills', 'credit-model', 'dream-cycle', 'auditor'] } } }, execute: async (input) => { const section = input.section as WebMcpSection; router.push(sectionPath(agentId, section)); return { ok: true, section, href: sectionPath(agentId, section) }; } });
-    register({ name: 'set_skill_status', description: 'Publicly change the lifecycle status of a skill on this agent.', inputSchema: { type: 'object', additionalProperties: false, required: ['skill_id', 'status'], properties: { skill_id: { type: 'string', minLength: 1 }, status: { type: 'string', enum: ['active', 'in_audit', 'deprecated'] } } }, execute: async (input) => webMcpSetSkillStatus(agentId, String(input.skill_id), input.status as 'active' | 'in_audit' | 'deprecated') });
-    register({ name: 'trigger_dream_cycle', description: 'Publicly start a Dream Cycle for this linked agent.', inputSchema: { type: 'object', additionalProperties: false, properties: { preset: { type: 'string', enum: ['frugal', 'balanced', 'thorough'] } } }, execute: async (input) => webMcpTriggerDream(agentId, input.preset as 'frugal' | 'balanced' | 'thorough' | undefined) });
-    register({ name: 'ask_auditor', description: 'Ask the evidence-bound auditor about this connected agent.', inputSchema: { type: 'object', additionalProperties: false, required: ['message'], properties: { message: { type: 'string', minLength: 1, maxLength: 1200 } } }, execute: async (input) => webMcpAskAuditor(agentId, String(input.message), requestId()) });
-  }, [agentId, router]);
+    const refreshAfterWrite = async <Result extends { ok?: boolean }>(action: () => Promise<Result>) => {
+      const result = await action();
+      if (result.ok) window.dispatchEvent(new Event(PORTAL_LIVE_REFRESH_EVENT));
+      return result;
+    };
+    register({ name: 'openx_list_public_agents', description: 'Read public OpenX Portal agent summaries and current connection state.', inputSchema: noInput, execute: async () => webMcpFleet() });
+    register({ name: 'openx_register_agent', description: 'Create or restore a public OpenX agent registration. A new registration returns its one-time agent key in this chat transcript.', inputSchema: { type: 'object', additionalProperties: false, required: ['display_name', 'host_type'], properties: { display_name: { type: 'string', minLength: 1, maxLength: 120 }, host_type: { type: 'string', enum: ['kiro-cli', 'claude-code', 'adk-python', 'custom'] }, description: { type: 'string', maxLength: 500 }, model: { type: 'string', maxLength: 120 }, capabilities: { type: 'array', items: { type: 'string' }, maxItems: 32 } } }, execute: async (input) => refreshAfterWrite(() => webMcpConnectAgent(input as unknown as Parameters<typeof webMcpConnectAgent>[0])) });
+    register({ name: 'openx_get_agent_overview', description: 'Read an OpenX agent’s public profile, live task activity, Dream state, and knowledge-sync state.', inputSchema: withAgentId({}), execute: async (input) => webMcpAgentOverview(String(input.agent_id)) });
+    register({ name: 'openx_get_working_process', description: 'Read the current or latest task process for an OpenX agent.', inputSchema: withAgentId({}), execute: async (input) => webMcpAgentOverview(String(input.agent_id)).then((result) => ({ ok: result.ok, activity: result.activity })) });
+    register({ name: 'openx_list_agent_skills', description: 'Read an OpenX agent’s reported capabilities and candidate skills.', inputSchema: withAgentId({}), execute: async (input) => webMcpSkills(String(input.agent_id)) });
+    register({ name: 'openx_get_wallet_summary', description: 'Read the public Status Network wallet balance summary for an OpenX agent.', inputSchema: withAgentId({}), execute: async (input) => webMcpWallet(String(input.agent_id)) });
+    register({ name: 'openx_get_dream_status', description: 'Read an OpenX agent’s Dream Cycle link and latest run summary.', inputSchema: withAgentId({}), execute: async (input) => webMcpDream(String(input.agent_id)) });
+    register({ name: 'openx_get_auditor_summary', description: 'Read evidence-only auditor status and reviewed-lesson summary for an OpenX agent.', inputSchema: withAgentId({}), execute: async (input) => webMcpAuditor(String(input.agent_id)) });
+    register({ name: 'openx_navigate_portal_section', description: 'Open an OpenX agent section in the visible Portal. This changes the current page only.', inputSchema: withAgentId({ section: { type: 'string', enum: ['studio', 'skills', 'credit-model', 'dream-cycle', 'auditor'] } }, ['section']), execute: async (input) => { const agentId = String(input.agent_id); const section = input.section as WebMcpSection; const href = sectionPath(agentId, section); router.push(href); return { ok: true, section, href }; } });
+    register({ name: 'openx_set_skill_status', description: 'Change an OpenX skill lifecycle status. This writes the selected status to the public Gateway.', inputSchema: withAgentId({ skill_id: { type: 'string', minLength: 1 }, status: { type: 'string', enum: ['active', 'in_audit', 'deprecated'] } }, ['skill_id', 'status']), execute: async (input) => refreshAfterWrite(() => webMcpSetSkillStatus(String(input.agent_id), String(input.skill_id), input.status as 'active' | 'in_audit' | 'deprecated')) });
+    register({ name: 'openx_trigger_dream_cycle', description: 'Start a Dream Cycle for an OpenX agent. This may create a paid run and changes its run state.', inputSchema: withAgentId({ preset: { type: 'string', enum: ['frugal', 'balanced', 'thorough'] } }), execute: async (input) => refreshAfterWrite(() => webMcpTriggerDream(String(input.agent_id), input.preset as 'frugal' | 'balanced' | 'thorough' | undefined)) });
+    register({ name: 'openx_ask_auditor', description: 'Send a question to an OpenX agent’s evidence-bound auditor. This records a new auditor chat turn.', inputSchema: withAgentId({ message: { type: 'string', minLength: 1, maxLength: 1200 } }, ['message']), execute: async (input) => refreshAfterWrite(() => webMcpAskAuditor(String(input.agent_id), String(input.message), requestId())) });
+  }, [router]);
 
   return <>{children}{available && <span className="sr-only" aria-live="polite">WebMCP tools ready</span>}</>;
 }
