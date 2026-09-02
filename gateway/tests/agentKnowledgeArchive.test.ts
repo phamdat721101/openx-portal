@@ -71,4 +71,16 @@ describe('connected-agent knowledge archive', () => {
     expect(row.sanitized_json).toContain('[redacted-personal-data]');
     expect(row.sanitized_json).not.toContain('private-token');
   });
+
+  it('persists a canonical REM envelope separately from generic agent evidence', () => {
+    const agentId = '33333333-3333-4333-8333-333333333333';
+    agentKnowledgeArchive.enqueue(agentId, {
+      source_type: 'lesson', source_id: 'lesson-1', archive_schema: '0g-dream-memory/v1',
+      payload: { lesson_id: 'lesson-1', state: 'PROMOTED_CONSTRAINT', content: 'Never persist bearer tokens.', evidence_proof: { xrpl_payment_tx: 'ABC' } },
+    });
+    const row = gatewayDatabase.raw().prepare("SELECT sanitized_json FROM agent_knowledge_records WHERE agent_id = ?").get(agentId) as { sanitized_json: string };
+    expect(row.sanitized_json).toContain('0g-dream-memory/v1');
+    expect(row.sanitized_json).toContain('PROMOTED_CONSTRAINT');
+    expect(row.sanitized_json).not.toContain('bearer token');
+  });
 });

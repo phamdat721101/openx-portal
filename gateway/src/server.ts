@@ -22,7 +22,7 @@ import {
 } from './services/agentStatusComposer.js';
 import { agentIngestionStore } from './services/agentIngestionStore.js';
 import { agentRegistry, AgentRegistryError } from './services/agentRegistry.js';
-import { dreamState, hyperMove, McpError, DreamRun } from './services/dreamGateway.js';
+import { dreamState, hyperMove, McpError, DreamRun, ManagedLesson } from './services/dreamGateway.js';
 import { usageLedger } from './services/usageLedger.js';
 import { xrplTestnetSettlement } from './services/xrplSettlement.js';
 import { nPaymentXrplWallet } from './services/nPaymentXrplWallet.js';
@@ -167,7 +167,22 @@ const persistDreamLessons = (agentId: string, runId: string, result: unknown): v
     if (content?.trim()) dreamState.addLesson(agentId, content.trim(), 'dream_cycle', runId);
   }
 };
-const queueDreamAudit = (run: DreamRun | undefined): void => { if (run && (run.status === 'completed' || run.status === 'failed')) { enqueueKnowledge(run.openx_agent_id, { source_type: 'dream_run', source_id: run.id, payload: run }); const job = auditorService.queueDreamAudit(run.openx_agent_id, run.id); if (job.status === 'queued') void auditorService.processDreamAudit(job.id); } };
+const remArchiveInput = (lesson: ManagedLesson): KnowledgeInput => ({
+  source_type: 'lesson', source_id: lesson.id, archive_schema: '0g-dream-memory/v1',
+  payload: {
+    lesson_id: lesson.id, run_id: lesson.run_id, state: lesson.state, content: lesson.content,
+    source: lesson.source, created_at: lesson.created_at,
+  },
+});
+const dreamRunArchiveInput = (run: DreamRun): KnowledgeInput => ({
+  source_type: 'dream_run', source_id: run.id, archive_schema: '0g-dream-memory/v1',
+  payload: {
+    run_id: run.id, state: run.status, completed_at: run.completed_at, created_at: run.created_at,
+    source: run.source, learning_brief: run.learning_brief,
+    evidence_proof: run.settlement?.status === 'settled' ? { xrpl_payment_tx: run.settlement.transaction_hash, payment_session_id: run.settlement.quote_id, settlement_rail: 'x402-xrpl-rlusd' } : undefined,
+  },
+});
+const queueDreamAudit = (run: DreamRun | undefined): void => { if (run && (run.status === 'completed' || run.status === 'failed')) { enqueueKnowledge(run.openx_agent_id, dreamRunArchiveInput(run)); const job = auditorService.queueDreamAudit(run.openx_agent_id, run.id); if (job.status === 'queued') void auditorService.processDreamAudit(job.id); } };
 
 const respondMcpError = (res: Response, error: unknown): void => {
   if (error instanceof McpError) { res.status(error.status === 402 ? 402 : error.status >= 400 ? error.status : 502).json({ ok: false, ...(typeof error.data === 'object' && error.data ? error.data as object : { error: 'hypermove_error', message: String(error.data) }) }); return; }
@@ -870,9 +885,19 @@ app.get('/v1/agents/:agentId/wake', async (req: Request, res: Response): Promise
   }
 });
 
-app.get('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => { res.json({ ok: true, lessons: dreamState.listLessons(req.params.agentId) }); });
+app.get('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  res.json({ ok: true, lessons: dreamState.listLessons(req.params.agentId).map((lesson) => ({ ...lesson, zerog_provenance: lesson.state === 'PROMOTED_CONSTRAINT' ? agentKnowledgeArchive.lessonProvenance(req.params.agentId, lesson.id) : undefined })) });
+});
+app.get('/v1/agents/:agentId/lessons/:lessonId/0g-proof', async (req: Request, res: Response): Promise<void> => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  if (!dreamState.listLessons(req.params.agentId).some((lesson) => lesson.id === req.params.lessonId)) { res.status(404).json({ ok: false, error: 'lesson_not_found' }); return; }
+  const proof = await agentKnowledgeArchive.lessonProof(req.params.agentId, req.params.lessonId);
+  if (!proof.verified) { res.status(409).json({ ok: false, error: 'proof_not_available', provenance: proof.provenance }); return; }
+  res.json({ ok: true, proof: { verified: true, provenance: proof.provenance, canonical_payload: proof.canonical_payload } });
+});
 app.post('/v1/agents/:agentId/lessons', (req: Request, res: Response): void => { const parsed = LessonSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.addLesson(req.params.agentId, parsed.data.content, parsed.data.source); enqueueKnowledge(req.params.agentId, { source_type: 'lesson', source_id: lesson.id, payload: lesson }); res.status(201).json({ ok: true, lesson }); });
-app.post('/v1/agents/:agentId/lessons/:lessonId/resolve', (req: Request, res: Response): void => { const parsed = LessonResolutionSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.resolveLesson(req.params.agentId, req.params.lessonId, parsed.data.action); if (!lesson) { res.status(404).json({ ok: false, error: 'lesson_not_found' }); return; } enqueueKnowledge(req.params.agentId, { source_type: 'lesson', source_id: lesson.id, payload: lesson }); res.json({ ok: true, lesson }); });
+app.post('/v1/agents/:agentId/lessons/:lessonId/resolve', (req: Request, res: Response): void => { const parsed = LessonResolutionSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } const lesson = dreamState.resolveLesson(req.params.agentId, req.params.lessonId, parsed.data.action); if (!lesson) { res.status(404).json({ ok: false, error: 'lesson_not_found' }); return; } enqueueKnowledge(req.params.agentId, { source_type: 'lesson', source_id: lesson.id, payload: lesson }); if (lesson.state === 'PROMOTED_CONSTRAINT') enqueueKnowledge(req.params.agentId, remArchiveInput(lesson)); res.json({ ok: true, lesson }); });
 
 /**
  * PRD 001: GET /v1/agent/status

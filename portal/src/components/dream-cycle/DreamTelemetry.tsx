@@ -3,6 +3,7 @@ import { DreamCycleState } from '@/lib/types';
 import { usePortal } from '@/lib/portalContext';
 import { dreamRunStreamUrl, fetchDreamLessons, fetchDreamState, fetchWakeContext, reconcileDreamRun, syncCompletedDreamRun, DreamLesson, DreamTriggerResponse, WakeContextResponse } from '@/lib/api/agentGateway';
 import { Moon, Sparkles, Activity, Brain, Database, ShieldCheck, CheckCircle2, Copy, Check, Loader2, ListOrdered, Terminal } from 'lucide-react';
+import { ZeroGMemoryVaultView } from './ZeroGMemoryVaultView';
 
 interface DreamTelemetryProps {
   agentId: string;
@@ -301,6 +302,8 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
           </div>
         )}
       </div>
+
+      <ZeroGMemoryVaultView agentId={agentId} lessons={lessons} />
 
       {/* System Prompt Injection Snippet */}
       {promptInjection && (

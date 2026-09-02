@@ -7,11 +7,16 @@ export type KnowledgeSource = 'agent_profile' | 'telemetry' | 'memory_episode' |
 export type ArchiveState = 'pending' | 'uploading' | 'uploaded' | 'retrying' | 'failed';
 export type SyncState = 'queued' | 'collecting' | 'uploading' | 'complete' | 'degraded';
 
-export interface KnowledgeInput { source_type: KnowledgeSource; source_id: string; payload: unknown; }
+export interface KnowledgeInput { source_type: KnowledgeSource; source_id: string; payload: unknown; archive_schema?: '0g-dream-memory/v1'; }
 export interface KnowledgeSync { agent_id: string; state: SyncState; total_records: number; uploaded_records: number; pending_records: number; failed_records: number; source_counts: Record<string, number>; updated_at: string; safe_error?: string; }
 export interface KnowledgeRecordDetail { agent_id: string; source_type: KnowledgeSource; source_id: string; content_hash: string; state: ArchiveState; root_hash: string | null; transaction_hash: string | null; message: string; data: unknown; updated_at: string; }
 
 interface ArchiveRow { id: string; agent_id: string; source_type: KnowledgeSource; source_id: string; content_hash: string; sanitized_json: string; state: ArchiveState; root_hash: string | null; transaction_hash: string | null; attempts: number; next_attempt_at: string | null; safe_error: string | null; created_at: string; updated_at: string; }
+
+export interface ZeroGProvenance {
+  status: ArchiveState | 'disabled'; root_hash?: string; tx_hash?: string; explorer_url?: string;
+  uploaded_at?: string; proof_available: boolean; message?: string;
+}
 
 const SECRET_KEY = /(^|_)(token|secret|password|authorization|cookie|private_?key|seed|agent_?key|credential)(_|$)/i;
 const SECRET_VALUE = /(bearer\s+[\w.-]+|0x[a-fA-F0-9]{64}|(?:api[_-]?key|token|secret)\s*[:=]\s*[^\s,]+)/gi;
@@ -68,7 +73,9 @@ export class AgentKnowledgeArchive {
 
   public enqueue(agentId: string, input: KnowledgeInput): void {
     const payload = sanitize(input.payload);
-    const sanitizedJson = stable({ schema_version: 1, agent_id: agentId, source_type: input.source_type, source_id: input.source_id, payload });
+    const sanitizedJson = input.archive_schema === '0g-dream-memory/v1'
+      ? stable({ version: input.archive_schema, agent_id: agentId, source_type: input.source_type, source_id: input.source_id, ...payload as Record<string, unknown> })
+      : stable({ schema_version: 1, agent_id: agentId, source_type: input.source_type, source_id: input.source_id, payload });
     const contentHash = createHash('sha256').update(sanitizedJson).digest('hex');
     const timestamp = now();
     gatewayDatabase.raw().prepare(`INSERT OR IGNORE INTO agent_knowledge_records
@@ -121,6 +128,31 @@ export class AgentKnowledgeArchive {
     }));
   }
 
+  public lessonProvenance(agentId: string, lessonId: string): ZeroGProvenance {
+    const health = this.health();
+    if (health.state !== 'ready') return { status: 'disabled', proof_available: false, message: health.reason };
+    const row = gatewayDatabase.raw().prepare("SELECT * FROM agent_knowledge_records WHERE agent_id = ? AND source_type = 'lesson' AND source_id = ? AND sanitized_json LIKE '%0g-dream-memory/v1%' ORDER BY updated_at DESC LIMIT 1").get(agentId, lessonId) as ArchiveRow | undefined;
+    if (!row) return { status: 'pending', proof_available: false, message: 'Eligible REM lesson has not been queued yet.' };
+    return { status: row.state, ...(row.root_hash ? { root_hash: row.root_hash } : {}), ...(row.transaction_hash ? { tx_hash: row.transaction_hash, explorer_url: `https://scan-testnet.0g.ai/tx/${row.transaction_hash}` } : {}), ...(row.state === 'uploaded' ? { uploaded_at: row.updated_at } : {}), proof_available: row.state === 'uploaded', ...(row.safe_error ? { message: row.safe_error } : {}) };
+  }
+
+  public async lessonProof(agentId: string, lessonId: string): Promise<{ provenance: ZeroGProvenance; canonical_payload?: unknown; verified: boolean }> {
+    const provenance = this.lessonProvenance(agentId, lessonId);
+    if (!provenance.proof_available || !provenance.root_hash) return { provenance, verified: false };
+    const row = gatewayDatabase.raw().prepare("SELECT * FROM agent_knowledge_records WHERE agent_id = ? AND source_type = 'lesson' AND source_id = ? AND root_hash = ? ORDER BY updated_at DESC LIMIT 1").get(agentId, lessonId, provenance.root_hash) as ArchiveRow | undefined;
+    if (!row) return { provenance: { ...provenance, proof_available: false, message: 'Archive record is unavailable.' }, verified: false };
+    try {
+      const { indexer } = this.client();
+      const [blob, error] = await indexer.downloadToBlob(row.root_hash!, { proof: true, decryption: { privateKey: this.config().decryptionKey! } });
+      if (error) throw error;
+      const text = await blob.text();
+      if (text !== row.sanitized_json) throw new Error('Downloaded archive does not match the canonical REM envelope.');
+      return { provenance, canonical_payload: JSON.parse(text), verified: true };
+    } catch {
+      return { provenance: { ...provenance, proof_available: false, message: '0G proof verification failed.' }, verified: false };
+    }
+  }
+
   /** Retrieves only sanitized, proof-verified records for public auditor grounding. */
   public async retrieve(agentId: string, query: string, limit = 6): Promise<Array<{ id: string; source_type: KnowledgeSource; root_hash: string; excerpt: string; payload: unknown }>> {
     if (this.health().state !== 'ready') return [];
@@ -168,10 +200,12 @@ export class AgentKnowledgeArchive {
     try {
       const { indexer, signer } = this.client();
       const data = new MemData(new TextEncoder().encode(row.sanitized_json));
-      const [, treeError] = await data.merkleTree(); if (treeError) throw treeError;
+      const [tree, treeError] = await data.merkleTree(); if (treeError || !tree) throw treeError || new Error('0G Merkle tree could not be built.');
+      const localRootHash = tree.rootHash();
       const [transaction, uploadError] = await indexer.upload(data, this.config().rpcUrl!, signer, { encryption: { type: 'ecies', recipientPubKey: this.config().recipientPubKey! } });
       if (uploadError) throw uploadError;
       if (!('rootHash' in transaction)) throw new Error('Fragmented 0G archive response is not supported for bounded knowledge records.');
+      if (transaction.rootHash !== localRootHash) throw new Error('0G upload root does not match the locally computed Merkle root.');
       const receipt = await signer.provider!.waitForTransaction(transaction.txHash, 1, 120_000);
       if (!receipt || receipt.status !== 1) throw new Error('0G storage upload transaction was not confirmed successfully.');
       db.prepare("UPDATE agent_knowledge_records SET state = 'uploaded', root_hash = ?, transaction_hash = ?, next_attempt_at = NULL, safe_error = NULL, updated_at = ? WHERE id = ?").run(transaction.rootHash, transaction.txHash, now(), row.id);

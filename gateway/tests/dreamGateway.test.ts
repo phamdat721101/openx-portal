@@ -124,6 +124,14 @@ describe('Dream Gateway routes', () => {
     const resolved = await request(app).post(`/v1/agents/${agentId}/lessons/${created.body.lesson.id}/resolve`).send({ action: 'PROMOTED_CONSTRAINT' });
     expect(resolved.status).toBe(200);
     expect(resolved.body.lesson.state).toBe('PROMOTED_CONSTRAINT');
+
+    const lessons = await request(app).get(`/v1/agents/${agentId}/lessons`);
+    expect(lessons.status).toBe(200);
+    expect(lessons.body.lessons[0].zerog_provenance).toMatchObject({ status: 'disabled', proof_available: false });
+
+    const proof = await request(app).get(`/v1/agents/${agentId}/lessons/${created.body.lesson.id}/0g-proof`);
+    expect(proof.status).toBe(409);
+    expect(proof.body).toMatchObject({ ok: false, error: 'proof_not_available', provenance: { status: 'disabled' } });
   });
 
   it('securely manages agent-specific HyperMove credentials via PUT /v1/agents/:agentId/dream/credential', async () => {

@@ -170,7 +170,9 @@ export interface GatewaySkillItem {
   telemetry: { total_calls: number; successful_calls: number; failed_calls: number; avg_latency_ms: number | null; last_called_at: string | null };
 }
 export interface DreamReadinessResponse { ok: boolean; ready?: boolean; has_token?: boolean; token_vault_configured?: boolean; using_service_credential?: boolean; self_service_enabled?: boolean; hypermove_mcp_configured?: boolean; is_linked?: boolean; link?: { hypermove_agent_id: string } | null; readiness?: unknown; error?: string; message?: string; }
-export interface DreamLesson { id: string; openx_agent_id: string; state: 'UNREVIEWED' | 'IN_REVIEW' | 'PROMOTED_CONSTRAINT' | 'QUARANTINED' | 'REJECTED'; content: string; source: 'manual' | 'dream_cycle'; created_at: string; resolved_at?: string; }
+export interface ZeroGProvenance { status: 'pending' | 'uploading' | 'uploaded' | 'retrying' | 'failed' | 'disabled'; root_hash?: string; tx_hash?: string; explorer_url?: string; uploaded_at?: string; proof_available: boolean; message?: string; }
+export interface DreamLesson { id: string; openx_agent_id: string; state: 'UNREVIEWED' | 'IN_REVIEW' | 'PROMOTED_CONSTRAINT' | 'QUARANTINED' | 'REJECTED'; content: string; source: 'manual' | 'dream_cycle'; created_at: string; resolved_at?: string; zerog_provenance?: ZeroGProvenance; }
+export interface DreamLessonProof { verified: boolean; provenance: ZeroGProvenance; canonical_payload: unknown; }
 
 const GATEWAY_URL =
   process.env.NEXT_PUBLIC_OPENX_GATEWAY_URL || 'http://localhost:7411';
@@ -423,6 +425,14 @@ export async function fetchDreamLessons(agentId: string): Promise<DreamLesson[]>
     if (!response.ok) return [];
     return (await response.json()).lessons || [];
   } catch { return []; }
+}
+
+export async function fetchDreamLessonProof(agentId: string, lessonId: string): Promise<DreamLessonProof | null> {
+  try {
+    const response = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/lessons/${encodeURIComponent(lessonId)}/0g-proof`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return null;
+    return (await response.json()).proof || null;
+  } catch { return null; }
 }
 
 export async function triggerDreamRun(agentId: string): Promise<DreamTriggerResponse> {
