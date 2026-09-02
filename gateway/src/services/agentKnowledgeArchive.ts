@@ -142,11 +142,7 @@ export class AgentKnowledgeArchive {
     const row = gatewayDatabase.raw().prepare("SELECT * FROM agent_knowledge_records WHERE agent_id = ? AND source_type = 'lesson' AND source_id = ? AND root_hash = ? ORDER BY updated_at DESC LIMIT 1").get(agentId, lessonId, provenance.root_hash) as ArchiveRow | undefined;
     if (!row) return { provenance: { ...provenance, proof_available: false, message: 'Archive record is unavailable.' }, verified: false };
     try {
-      const { indexer } = this.client();
-      const [blob, error] = await indexer.downloadToBlob(row.root_hash!, { proof: true, decryption: { privateKey: this.config().decryptionKey! } });
-      if (error) throw error;
-      const text = await blob.text();
-      if (text !== row.sanitized_json) throw new Error('Downloaded archive does not match the canonical REM envelope.');
+      const text = await this.downloadVerified(row.root_hash!, row.sanitized_json);
       return { provenance, canonical_payload: JSON.parse(text), verified: true };
     } catch {
       return { provenance: { ...provenance, proof_available: false, message: '0G proof verification failed.' }, verified: false };
@@ -160,14 +156,11 @@ export class AgentKnowledgeArchive {
     const rows = gatewayDatabase.raw().prepare("SELECT * FROM agent_knowledge_records WHERE agent_id = ? AND state = 'uploaded' ORDER BY updated_at DESC LIMIT 80").all(agentId) as ArchiveRow[];
     const selected = rows.map((row) => ({ row, score: words.reduce((score, word) => score + (row.sanitized_json.toLowerCase().includes(word) ? 1 : 0), 0) }))
       .filter((item) => item.score > 0).sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(limit, 8)));
-    const { indexer } = this.client(); const results: Array<{ id: string; source_type: KnowledgeSource; root_hash: string; excerpt: string; payload: unknown }> = [];
+    const results: Array<{ id: string; source_type: KnowledgeSource; root_hash: string; excerpt: string; payload: unknown }> = [];
     for (const { row } of selected) {
       if (!row.root_hash) continue;
       try {
-        const [blob, error] = await indexer.downloadToBlob(row.root_hash, { proof: true, decryption: { privateKey: this.config().decryptionKey! } });
-        if (error) throw error;
-        const text = await blob.text();
-        if (text !== row.sanitized_json) throw new Error('Downloaded 0G archive did not match persisted content hash.');
+        const text = await this.downloadVerified(row.root_hash, row.sanitized_json);
         const parsed = JSON.parse(text) as { payload?: unknown };
         results.push({ id: row.id, source_type: row.source_type, root_hash: row.root_hash, excerpt: text.slice(0, 280), payload: parsed.payload ?? null });
       } catch {
@@ -194,20 +187,32 @@ export class AgentKnowledgeArchive {
     };
   }
 
+  /** Verifies the 0G proof path and decrypts the stored bytes before use. */
+  private async downloadVerified(rootHash: string, expected: string): Promise<string> {
+    const { indexer } = this.client();
+    const [blob, error] = await indexer.downloadToBlob(rootHash, { proof: true, decryption: { privateKey: this.config().decryptionKey! } });
+    if (error) throw error;
+    const text = await blob.text();
+    if (text !== expected) throw new Error('Downloaded 0G archive does not match the canonical envelope.');
+    return text;
+  }
+
   private async upload(row: ArchiveRow): Promise<void> {
     const db = gatewayDatabase.raw(); const timestamp = now();
     db.prepare("UPDATE agent_knowledge_records SET state = 'uploading', attempts = attempts + 1, updated_at = ? WHERE id = ?").run(timestamp, row.id);
     try {
       const { indexer, signer } = this.client();
+      if (createHash('sha256').update(row.sanitized_json).digest('hex') !== row.content_hash) throw new Error('Persisted archive content hash does not match its canonical envelope.');
       const data = new MemData(new TextEncoder().encode(row.sanitized_json));
-      const [tree, treeError] = await data.merkleTree(); if (treeError || !tree) throw treeError || new Error('0G Merkle tree could not be built.');
-      const localRootHash = tree.rootHash();
       const [transaction, uploadError] = await indexer.upload(data, this.config().rpcUrl!, signer, { encryption: { type: 'ecies', recipientPubKey: this.config().recipientPubKey! } });
       if (uploadError) throw uploadError;
       if (!('rootHash' in transaction)) throw new Error('Fragmented 0G archive response is not supported for bounded knowledge records.');
-      if (transaction.rootHash !== localRootHash) throw new Error('0G upload root does not match the locally computed Merkle root.');
+      if (!/^0x[a-fA-F0-9]{64}$/.test(transaction.rootHash)) throw new Error('0G upload returned an invalid encrypted storage root.');
       const receipt = await signer.provider!.waitForTransaction(transaction.txHash, 1, 120_000);
       if (!receipt || receipt.status !== 1) throw new Error('0G storage upload transaction was not confirmed successfully.');
+      // Encryption changes the storage Merkle root. Verify the returned root by
+      // proof-backed download and decryption, not against the plaintext tree.
+      await this.downloadVerified(transaction.rootHash, row.sanitized_json);
       db.prepare("UPDATE agent_knowledge_records SET state = 'uploaded', root_hash = ?, transaction_hash = ?, next_attempt_at = NULL, safe_error = NULL, updated_at = ? WHERE id = ?").run(transaction.rootHash, transaction.txHash, now(), row.id);
     } catch (error) {
       const attempts = row.attempts + 1; const terminal = attempts >= Number(process.env.ZEROG_STORAGE_RETRY_LIMIT || 5);

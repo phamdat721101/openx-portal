@@ -174,6 +174,11 @@ const remArchiveInput = (lesson: ManagedLesson): KnowledgeInput => ({
     source: lesson.source, created_at: lesson.created_at,
   },
 });
+/** Builds canonical REM records for both newly promoted and historic lessons. */
+const promotedRemArchiveInputs = (agentId: string): KnowledgeInput[] =>
+  dreamState.listLessons(agentId)
+    .filter((lesson) => lesson.state === 'PROMOTED_CONSTRAINT')
+    .map(remArchiveInput);
 const dreamRunArchiveInput = (run: DreamRun): KnowledgeInput => ({
   source_type: 'dream_run', source_id: run.id, archive_schema: '0g-dream-memory/v1',
   payload: {
@@ -393,6 +398,9 @@ const syncConnectedAgentKnowledge = (agentId: string) => {
   for (const item of agentIngestionStore.getCandidateSkills(agentId)) inputs.push({ source_type: 'skill_metadata', source_id: item.id, payload: item });
   for (const item of dreamState.listRuns(agentId)) inputs.push({ source_type: 'dream_run', source_id: item.id, payload: item });
   for (const item of dreamState.listLessons(agentId)) inputs.push({ source_type: 'lesson', source_id: item.id, payload: item });
+  // Generic lesson evidence predates REM provenance. Include the immutable REM
+  // envelope so reconnects and operator syncs backfill historic promotions.
+  inputs.push(...promotedRemArchiveInputs(agentId));
   for (const item of auditorService.list(agentId, 100)) inputs.push({ source_type: 'audit', source_id: item.id, payload: item });
   try { inputs.push({ source_type: 'usage_summary', source_id: new Date().toISOString().slice(0, 7), payload: usageLedger.summary(agentId) }); } catch { /* Production usage configuration is independent of archive sync. */ }
   return agentKnowledgeArchive.sync(agentId, inputs);
@@ -599,6 +607,19 @@ app.post('/v1/admin/knowledge-sync', async (req: Request, res: Response): Promis
   await agentKnowledgeArchive.flush();
   const results = agents.map((agent) => ({ agent_id: agent.agent_id, display_name: agent.display_name, sync: agentKnowledgeArchive.status(agent.agent_id), records: agentKnowledgeArchive.records(agent.agent_id) }));
   res.json({ ok: true, message: 'All connected-agent data was sanitized and published to 0G Storage.', storage: agentKnowledgeArchive.health(), agent_count: results.length, retried_records, results });
+});
+
+/** Replays only historic promoted REM lessons without changing their lifecycle state. */
+app.post('/v1/admin/0g-rem-backfill', async (req: Request, res: Response): Promise<void> => {
+  if (!hasArchiveAdminAuthority(req)) { res.status(401).json({ ok: false, error: 'admin_authorization_required' }); return; }
+  if (agentKnowledgeArchive.health().state !== 'ready') { res.status(409).json({ ok: false, error: 'knowledge_storage_not_ready', storage: agentKnowledgeArchive.health() }); return; }
+  const results = agentRegistry.list().map((agent) => {
+    const inputs = promotedRemArchiveInputs(agent.agent_id);
+    agentKnowledgeArchive.sync(agent.agent_id, inputs);
+    return { agent_id: agent.agent_id, queued_rem_lessons: inputs.length };
+  });
+  await agentKnowledgeArchive.flush();
+  res.json({ ok: true, message: 'Historic promoted REM lessons were queued for 0G Storage publication.', storage: agentKnowledgeArchive.health(), queued_rem_lessons: results.reduce((total, item) => total + item.queued_rem_lessons, 0), results: results.map((item) => ({ ...item, sync: agentKnowledgeArchive.status(item.agent_id) })) });
 });
 
 app.get('/v1/agents/:agentId/activity', (req: Request, res: Response): void => {

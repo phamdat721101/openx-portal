@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { app } from '../src/server.js';
 import { gatewayDatabase } from '../src/db/database.js';
 import { agentIngestionStore } from '../src/services/agentIngestionStore.js';
 import { agentKnowledgeArchive } from '../src/services/agentKnowledgeArchive.js';
 import { agentRegistry } from '../src/services/agentRegistry.js';
+import { dreamState } from '../src/services/dreamGateway.js';
 
 describe('connected-agent knowledge archive', () => {
   const storageEnvironment = [
@@ -82,5 +83,32 @@ describe('connected-agent knowledge archive', () => {
     expect(row.sanitized_json).toContain('0g-dream-memory/v1');
     expect(row.sanitized_json).toContain('PROMOTED_CONSTRAINT');
     expect(row.sanitized_json).not.toContain('bearer token');
+  });
+
+  it('backfills historic promoted lessons through the protected REM archive endpoint', async () => {
+    process.env.OPENX_DREAM_CREDENTIAL_ADMIN_TOKEN = 'test-admin-secret-token-12345';
+    const agentId = '44444444-4444-4444-8444-444444444444';
+    await request(app).post('/v1/agent/register').send({ agent_id: agentId, display_name: 'Historic REM Agent', host_type: 'custom' });
+    const lesson = dreamState.addLesson(agentId, 'Keep signed storage receipts with the promoted constraint.');
+    dreamState.resolveLesson(agentId, lesson.id, 'PROMOTED_CONSTRAINT');
+    const health = vi.spyOn(agentKnowledgeArchive, 'health').mockReturnValue({ state: 'ready' });
+    const processPending = vi.spyOn(agentKnowledgeArchive, 'processPending').mockResolvedValue(0);
+    const flush = vi.spyOn(agentKnowledgeArchive, 'flush').mockResolvedValue();
+
+    const unauthenticated = await request(app).post('/v1/admin/0g-rem-backfill');
+    const response = await request(app).post('/v1/admin/0g-rem-backfill').set('Authorization', 'Bearer test-admin-secret-token-12345');
+    const replay = await request(app).post('/v1/admin/0g-rem-backfill').set('Authorization', 'Bearer test-admin-secret-token-12345');
+    const remRows = gatewayDatabase.raw().prepare("SELECT sanitized_json FROM agent_knowledge_records WHERE agent_id = ? AND sanitized_json LIKE '%0g-dream-memory/v1%'").all(agentId) as Array<{ sanitized_json: string }>;
+
+    expect(unauthenticated.status).toBe(401);
+    expect(response.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, queued_rem_lessons: 1, results: [{ agent_id: agentId, queued_rem_lessons: 1 }] });
+    expect(remRows).toHaveLength(1);
+    expect(remRows[0].sanitized_json).toContain(lesson.id);
+
+    health.mockRestore();
+    processPending.mockRestore();
+    flush.mockRestore();
   });
 });

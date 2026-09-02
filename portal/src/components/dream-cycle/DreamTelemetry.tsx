@@ -49,6 +49,16 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
     void fetchDreamState(agentId).then((data) => { if (data?.latest_run) setRun(data.latest_run); });
   }, [loadWakeContext]);
 
+  // 0G pinning is asynchronous. Refresh only while the vault has an active
+  // archive job so a confirmed transaction hash appears without a page reload.
+  const awaitingZeroGArchive = lessons.some((lesson) => lesson.state === 'PROMOTED_CONSTRAINT'
+    && ['pending', 'uploading', 'retrying'].includes(lesson.zerog_provenance?.status || 'pending'));
+  React.useEffect(() => {
+    if (!awaitingZeroGArchive) return;
+    const timer = window.setInterval(() => { void fetchDreamLessons(agentId).then(setLessons); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [agentId, awaitingZeroGArchive]);
+
   React.useEffect(() => {
     if (!run || run.status !== 'running') return;
     const source = new EventSource(dreamRunStreamUrl(agentId, run.id));
@@ -172,9 +182,9 @@ export function DreamTelemetry({ agentId, state }: DreamTelemetryProps) {
             </div>
             <div>
               <span className="text-[11px] font-medium text-on-surface-variant flex items-center gap-1">
-                <Database className="h-3 w-3 text-secondary" /> Memories
+                <Database className="h-3 w-3 text-secondary" /> Dream memories
               </span>
-              <div className="font-mono text-lg font-bold text-on-surface">{wakeData?.upstream?.memories_count || state.memory_nodes_total}</div>
+              <div className="font-mono text-lg font-bold text-on-surface">{wakeData?.upstream?.memories_count ?? state.memory_nodes_total}</div>
             </div>
             <div>
               <span className="text-[11px] font-medium text-on-surface-variant flex items-center gap-1">
