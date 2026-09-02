@@ -122,22 +122,40 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [usageSummaries, setUsageSummaries] = useState<UsageSummary[]>([]);
   const [knowledgeSyncByAgent, setKnowledgeSyncByAgent] = useState<Record<string, KnowledgeSync>>({});
 
-  const projectGatewayAgent = (agent: RegisteredAgentProjection, dreamLink?: string | null): StudioAgent => ({
-    id: agent.agent_id,
-    slug: agent.slug,
-    display_name: agent.display_name,
-    description: agent.description || 'Connected local agent. Live operational data appears when it syncs.',
-    training_stage: 0,
-    owner_address: agent.owner_address || 'Unverified owner',
-    pending_actions: { dream_diffs_pending: 0, federation_broadcasts_pending: 0 },
-    created_at: agent.registered_at,
-    connection_state: agent.state,
-    registration_source: agent.registration_source,
-    last_seen_at: agent.last_seen_at,
-    owner_verified: agent.owner_verified,
-    is_demo: false,
-    hypermove_dream_agent_id: dreamLink || null,
-  });
+  const projectGatewayAgent = (
+    agent: RegisteredAgentProjection,
+    dreamLink?: string | null,
+    overviewItem?: import('./api/agentGateway').FleetOverviewAgent
+  ): StudioAgent => {
+    let stage = 0;
+    const hasDreamCompleted = overviewItem?.dream?.linked && (overviewItem?.dream?.latest_run?.status === 'completed' || overviewItem?.dream?.latest_run?.status === 'partial');
+    if (hasDreamCompleted) {
+      stage = 4;
+    } else if ((overviewItem?.activity?.latest_task?.tools_used?.length || 0) > 2 || (overviewItem?.knowledge_sync?.total_records || 0) >= 4) {
+      stage = 3;
+    } else if (Boolean(overviewItem?.activity?.latest_task || overviewItem?.activity?.current_task || (overviewItem?.knowledge_sync?.total_records || 0) > 0)) {
+      stage = 2;
+    } else if (agent.capabilities && agent.capabilities.length > 0) {
+      stage = 1;
+    }
+
+    return {
+      id: agent.agent_id,
+      slug: agent.slug,
+      display_name: agent.display_name,
+      description: agent.description || 'Connected local agent. Live operational data appears when it syncs.',
+      training_stage: stage,
+      owner_address: agent.owner_address || 'Unverified owner',
+      pending_actions: { dream_diffs_pending: 0, federation_broadcasts_pending: 0 },
+      created_at: agent.registered_at,
+      connection_state: agent.state,
+      registration_source: agent.registration_source,
+      last_seen_at: agent.last_seen_at,
+      owner_verified: agent.owner_verified,
+      is_demo: false,
+      hypermove_dream_agent_id: dreamLink || null,
+    };
+  };
 
   // Theme synchronization
   React.useEffect(() => {
@@ -187,6 +205,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         setTelemetryEvents(traces);
       }
       const overview = await fetchFleetOverview();
+      const overviewMap = new Map((overview?.agents || []).map((item) => [item.agent.agent_id, item]));
       const registered = overview ? overview.agents.map((item) => item.agent) : await fetchRegisteredAgents();
       const dreamLinks = new Map((overview?.agents || []).map((item) => [item.agent.agent_id, item.dream.hypermove_agent_id]));
       if (isMounted) setDreamStatusByAgent(Object.fromEntries((overview?.agents || []).flatMap((item) => item.dream.latest_run ? [[item.agent.agent_id, item.dream.latest_run] as const] : [])));
@@ -208,13 +227,13 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       } else if (isMounted) setUsageSummaries([]);
       // seam:portal-projection
       const agentsForSync = registered.length > 0
-        ? registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))
+        ? registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id), overviewMap.get(agent.agent_id)))
         : SHOW_MOCK_AGENTS ? MOCK_AGENTS : [];
       if (isMounted && (overview || online)) {
         setAgents((previous) => {
           const gatewayIds = new Set(registered.map((agent) => agent.agent_id));
           const demos = SHOW_MOCK_AGENTS ? previous.filter((agent) => !gatewayIds.has(agent.id)) : [];
-          return [...demos, ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id)))];
+          return [...demos, ...registered.map((agent) => projectGatewayAgent(agent, dreamLinks.get(agent.agent_id), overviewMap.get(agent.agent_id)))];
         });
       }
 

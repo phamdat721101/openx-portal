@@ -34,6 +34,7 @@ export class DreamStateStore {
     const reconciliation: DreamReconciliation = { last_checked_at: new Date().toISOString(), upstream_status: 'completed' };
     if (existing) {
       Object.assign(existing, { result, learning_brief: learningBrief, reconciliation });
+      this.state.runs = [existing, ...this.state.runs.filter((item) => item.id !== existing.id)];
       this.persist();
       return { run: existing, created: false };
     }
@@ -48,7 +49,25 @@ export class DreamStateStore {
   }
   updateRun(id: string, patch: Partial<DreamRun>) { const run = this.state.runs.find((item) => item.id === id); if (!run) return undefined; Object.assign(run, patch); this.persist(); return run; }
   getRun(id: string) { return this.state.runs.find((item) => item.id === id); }
-  latestRun(openxAgentId: string) { return this.state.runs.find((item) => item.openx_agent_id === openxAgentId); }
+  latestRun(openxAgentId: string) {
+    const runs = this.state.runs.filter((item) => item.openx_agent_id === openxAgentId);
+    if (!runs.length) return undefined;
+    // Prefer active running or completed runs over expired/abandoned payment_required runs
+    const nonExpiredRuns = runs.filter((r) => {
+      if (r.status !== 'payment_required') return true;
+      const quoteExpires = (r.quote as any)?.payment?.expiresAt || (r.quote as any)?.expires_at;
+      if (quoteExpires && Date.parse(quoteExpires) < Date.now()) return false;
+      const createdTime = Date.parse(r.created_at || '1970-01-01');
+      if (Date.now() - createdTime > 15 * 60 * 1000) return false;
+      return true;
+    });
+    const candidates = nonExpiredRuns.length > 0 ? nonExpiredRuns : runs;
+    return candidates.slice().sort((a, b) => {
+      const timeA = Date.parse(a.completed_at || a.created_at || '1970-01-01');
+      const timeB = Date.parse(b.completed_at || b.created_at || '1970-01-01');
+      return timeB - timeA;
+    })[0];
+  }
   listRuns(openxAgentId: string) { return this.state.runs.filter((item) => item.openx_agent_id === openxAgentId); }
   runningRuns() { return this.state.runs.filter((item) => item.status === 'running'); }
   listLessons(openxAgentId: string) { return this.state.lessons.filter((item) => item.openx_agent_id === openxAgentId); }

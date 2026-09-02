@@ -29,6 +29,25 @@ describe('DreamStateStore', () => {
       expect(restored.getCachedWakeContext('openx-agent')).toMatchObject({ upstream: { daily_digest: 'Cached morning brief.' } });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it('orders latestRun by timestamp so completed runs take precedence over older payment_required runs', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openx-dream-order-'));
+    const path = join(directory, 'dream-state.json');
+    try {
+      const store = new DreamStateStore(path, Buffer.alloc(32, 7).toString('base64'));
+      const link = store.link('agent-timestamp-test', 'hypermove-agent');
+      const run1 = store.createRun('agent-timestamp-test', link, 'balanced', 0.05);
+      store.updateRun(run1.id, { status: 'payment_required', created_at: '2026-08-31T12:00:00.000Z' });
+
+      const imported = store.importCompletedRun('agent-timestamp-test', link, { memories_count: 5 }, { generated_at: '2026-08-31T12:30:00.000Z', stage_summaries: {}, constraints_count: 0 }, 'fingerprint-1');
+      store.updateRun(imported.run.id, { created_at: '2026-08-31T12:30:00.000Z', completed_at: '2026-08-31T12:30:00.000Z' });
+
+      const latest = store.latestRun('agent-timestamp-test');
+      expect(latest).toBeDefined();
+      expect(latest?.id).toBe(imported.run.id);
+      expect(latest?.status).toBe('completed');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
 });
 
 describe('Dream Gateway routes', () => {
