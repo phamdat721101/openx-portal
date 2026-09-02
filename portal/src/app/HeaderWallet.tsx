@@ -5,6 +5,7 @@ import { usePortal } from '@/lib/portalContext';
 import { usePortalAuth } from './PortalAuthProvider';
 import { LogIn, LogOut, Sun, Moon, Copy, Check, ShieldAlert, Bot } from 'lucide-react';
 import Link from 'next/link';
+import { WebMcpStatusIndicator } from '@/lib/webmcp/WebMcpProvider';
 
 export function HeaderWallet() {
   const { theme, toggleTheme } = usePortal();
@@ -20,6 +21,7 @@ export function HeaderWallet() {
 
   return (
     <div className="flex items-center gap-3">
+      <WebMcpStatusIndicator />
       <a
         href="https://chatgpt.com/?hints=search&q=OpenX%20Portal%20agent%20management"
         target="_blank"

@@ -8,24 +8,15 @@ test('registers global namespaced Site Tools and refreshes Portal state after a 
       configurable: true,
       value: { registerTool: (tool: (typeof tools)[number]) => tools.push(tool) },
     });
-    Object.defineProperty(window, 'ethereum', {
-      configurable: true,
-      value: { isMetaMask: true, request: async () => [], on: () => undefined, removeListener: () => undefined },
-    });
   });
 
   let refreshEvents = 0;
-  await page.route('**/health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) }));
-  await page.route('**/v1/**', (route) => {
-    if (route.request().url().includes('/v1/agents/overview')) {
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, agents: [], summary: { registered: 0, online: 0, linked: 0, auditor_ready: 0 } }) });
-    }
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, agents: [], traces: [], summaries: [] }) });
-  });
   await page.route('**/v1/webmcp/agents/agent-123/skills/skill-123/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, skill: { id: 'skill-123', status: 'active' } }) }));
 
   await page.goto('/');
   await expect.poll(() => page.evaluate(() => (window as Window & { __openxTools?: unknown[] }).__openxTools?.length || 0)).toBe(12);
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.webmcp)).toBe('ready');
+  await expect.poll(() => page.evaluate(() => document.querySelector('[role="status"]')?.textContent)).toBe('Site Tools available (12/12)');
   await page.evaluate(() => window.addEventListener('openx:refresh-live-data', () => { (window as Window & { __openxRefreshEvents?: number }).__openxRefreshEvents = ((window as Window & { __openxRefreshEvents?: number }).__openxRefreshEvents || 0) + 1; }));
 
   const tools = await page.evaluate(() => (window as Window & { __openxTools?: Array<{ name: string; inputSchema: Record<string, unknown>; description: string; annotations?: { readOnlyHint: boolean } }> }).__openxTools!.map(({ name, inputSchema, description, annotations }) => ({ name, inputSchema, description, annotations })));
@@ -50,6 +41,25 @@ test('registers global namespaced Site Tools and refreshes Portal state after a 
 
 test('keeps ordinary browsers functional when WebMCP is unavailable', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('html')).toHaveAttribute('data-webmcp', 'unavailable');
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.webmcp)).toBe('unavailable');
+  await expect.poll(() => page.evaluate(() => document.querySelector('[role="status"]')?.textContent)).toBe('Site Tools unavailable in this browser');
+  await expect(page.getByRole('link', { name: 'Studio Hub' })).toBeVisible();
+});
+
+test('reports a degraded Site Tools state when a registration is rejected', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: {
+        registerTool: (tool: { name: string }) => tool.name === 'openx_ask_auditor'
+          ? Promise.reject(new Error('host rejected tool'))
+          : undefined,
+      },
+    });
+  });
+
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.webmcp)).toBe('degraded');
+  await expect.poll(() => page.evaluate(() => document.querySelector('[role="status"]')?.textContent)).toBe('Site Tools degraded (11/12)');
   await expect(page.getByRole('link', { name: 'Studio Hub' })).toBeVisible();
 });
