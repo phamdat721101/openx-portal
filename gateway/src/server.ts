@@ -26,7 +26,7 @@ import { dreamState, hyperMove, McpError, DreamRun, ManagedLesson } from './serv
 import { usageLedger } from './services/usageLedger.js';
 import { xrplTestnetSettlement } from './services/xrplSettlement.js';
 import { nPaymentXrplWallet } from './services/nPaymentXrplWallet.js';
-import { statusWalletService } from './services/walletService.js';
+import { walletService } from './services/walletService.js';
 import { auditorService } from './services/auditorService.js';
 import { agentKnowledgeArchive, KnowledgeInput } from './services/agentKnowledgeArchive.js';
 import { SkillLifecycleStatus } from './types/agentIngestion.js';
@@ -65,8 +65,8 @@ const AgentRegisterSchema = z.object({
   model: z.string().trim().max(120).optional(),
   capabilities: z.array(z.string().trim().min(1).max(64)).max(32).optional().default([]),
   host_type: z.enum(['kiro-cli', 'claude-code', 'adk-python', 'custom']),
-  owner_address: z.string().trim().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
-  wallet_address: z.string().trim().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  owner_address: z.string().trim().regex(/^(0x[a-fA-F0-9]{40}|r[1-9A-HJ-NP-Za-km-z]{24,34})$/).optional(),
+  wallet_address: z.string().trim().regex(/^(0x[a-fA-F0-9]{40}|r[1-9A-HJ-NP-Za-km-z]{24,34})$/).optional(),
 }).strict();
 const AgentSyncSchema = z.object({
   agent_id: z.string().min(1),
@@ -531,7 +531,7 @@ app.post('/v1/webmcp/agents/:agentId/skills/:skillId/status', (req: Request, res
 app.get('/v1/webmcp/agents/:agentId/wallet', async (req: Request, res: Response): Promise<void> => {
   const agent = agentRegistry.get(req.params.agentId);
   if (!agent) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
-  const wallet = await statusWalletService.snapshot(agent.wallet_address || agent.owner_address);
+  const wallet = await walletService.snapshot(agent.wallet_address || agent.owner_address);
   res.json({ ok: true, wallet: { address: wallet.address, chain_id: wallet.chain_id, network: wallet.network, native_balance_wei: wallet.native_balance_wei, tokens: wallet.tokens, fetched_at: wallet.fetched_at, source_errors: wallet.source_errors } });
 });
 app.get('/v1/webmcp/agents/:agentId/dream', (req: Request, res: Response): void => {
@@ -647,11 +647,11 @@ app.post('/v1/agents/:agentId/skills/:skillId/status', (req: Request, res: Respo
   res.json({ ok: true, skill: { ...skill, status: parsed.data.status } });
 });
 
-/** Read-only Status Network balance, configured token, and explorer activity snapshot. */
+/** Read-only agent wallet balance, configured token, and explorer activity snapshot. */
 app.get('/v1/agents/:agentId/wallet', async (req: Request, res: Response): Promise<void> => {
   const agent = agentRegistry.get(req.params.agentId);
   if (!agent) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
-  res.json({ ok: true, agent_id: agent.agent_id, wallet: await statusWalletService.snapshot(agent.wallet_address || agent.owner_address) });
+  res.json({ ok: true, agent_id: agent.agent_id, wallet: await walletService.snapshot(agent.wallet_address || agent.owner_address) });
 });
 
 app.get('/v1/agents/:agentId/audits', (req: Request, res: Response): void => {

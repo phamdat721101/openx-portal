@@ -29,7 +29,7 @@ describe('wallet and advisory auditor APIs', () => {
 
     const wallet = await request(app).get(`/v1/agents/${agentId}/wallet`);
     expect(wallet.status).toBe(200);
-    expect(wallet.body.wallet).toMatchObject({ address: null, chain_id: 49986, network: 'Status Network Testnet' });
+    expect(wallet.body.wallet).toMatchObject({ address: null });
     expect(wallet.body.wallet.source_errors).toContain('wallet_not_linked');
 
     const telemetry = await request(app).post('/v1/agent/telemetry').send({ agent_id: agentId, task_id: 'audit-task', model: 'test-model', status: 'success', task_state: 'completed' });
@@ -139,5 +139,39 @@ describe('wallet and advisory auditor APIs', () => {
     expect(lessonChat.body.turn.content).not.toBe(dreamChat.body.turn.content);
     const restore = (key: string, value: string | undefined): void => { if (value === undefined) delete process.env[key]; else process.env[key] = value; };
     restore('ZEROG_COMPUTE_API_URL', original.url); restore('ZEROG_COMPUTE_API_KEY', original.key); restore('ZEROG_COMPUTE_MODEL', original.model);
+  });
+
+  it('resolves real EVM and XRPL wallet addresses provided during agent registration', async () => {
+    // 1. EVM Agent
+    const evmReg = await request(app).post('/v1/agent/register').send({
+      display_name: 'EVM Agent',
+      host_type: 'custom',
+      wallet_address: '0x1234567890123456789012345678901234567890',
+    });
+    expect(evmReg.status).toBe(201);
+    const evmAgentId = evmReg.body.agent.agent_id as string;
+    const evmWallet = await request(app).get(`/v1/agents/${evmAgentId}/wallet`);
+    expect(evmWallet.status).toBe(200);
+    expect(evmWallet.body.wallet).toMatchObject({
+      address: '0x1234567890123456789012345678901234567890',
+      network: expect.any(String),
+      chain_id: expect.any(Number),
+    });
+
+    // 2. XRPL Agent (via owner_address)
+    const xrplReg = await request(app).post('/v1/agent/register').send({
+      display_name: 'XRPL Agent',
+      host_type: 'custom',
+      owner_address: 'rPT1Sjq2YGrBMTttX4GZHjKu9DYfzbpAYe',
+    });
+    expect(xrplReg.status).toBe(201);
+    const xrplAgentId = xrplReg.body.agent.agent_id as string;
+    const xrplWallet = await request(app).get(`/v1/agents/${xrplAgentId}/wallet`);
+    expect(xrplWallet.status).toBe(200);
+    expect(xrplWallet.body.wallet).toMatchObject({
+      address: 'rPT1Sjq2YGrBMTttX4GZHjKu9DYfzbpAYe',
+      network: 'XRPL Testnet',
+      chain_id: 0,
+    });
   });
 });

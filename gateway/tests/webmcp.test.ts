@@ -22,7 +22,7 @@ describe('public WebMCP projection', () => {
 
     const wallet = await request(app).get(`/v1/webmcp/agents/${agentId}/wallet`);
     expect(wallet.status).toBe(200);
-    expect(wallet.body.wallet).toMatchObject({ chain_id: 49986, network: 'Status Network Testnet' });
+    expect(wallet.body.wallet).toMatchObject({ address: null, source_errors: expect.arrayContaining(['wallet_not_linked']) });
 
     const auditor = await request(app).get(`/v1/webmcp/agents/${agentId}/auditor`);
     expect(auditor.status).toBe(200);
