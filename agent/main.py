@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import uuid
 
 from env_loader import load_openx_env
 from gateway_client import (
@@ -72,7 +73,9 @@ def run_demo() -> int:
         print("[openx-deep-research-analyst] Capability sync failed; task not started")
         return 1
 
-    task_id = os.environ.get("OPENX_TASK_ID", "kiro-openx-portal-sync-20260826").strip()
+    # An explicit ID supports a caller-managed task; otherwise each execution is
+    # a distinct ordered timeline and cannot collide with a previous run.
+    task_id = os.environ.get("OPENX_TASK_ID", f"kiro-openx-portal-sync-{uuid.uuid4()}").strip()
     task_started_at = time.time()
     tool_id = "google-workspace-cli.sheets.read"
     with TaskReporter(agent_id, task_id, model, "OpenX Portal synchronization", "agent_operations", [tool_id]) as reporter:

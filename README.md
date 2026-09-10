@@ -1,68 +1,83 @@
-# 🌐 OpenX Portal — AI Agent Management & Orchestration Platform
+# OpenX Agent Portal
 
-OpenX Portal is the unified mission control and execution harness for autonomous AI agents. Built as a high-performance monorepo, it pairs a **Next.js 14 Management Studio** (`:3010`) with a **Node/TypeScript Gateway Sidecar** (`:7411`) and a **Python Google ADK Orchestrator**.
+OpenX Agent Portal is an AI-native management studio and operator control plane for autonomous AI agents, pairing an Express Gateway sidecar (`:7411`), a Next.js Operator Portal (`:3010`), and an autonomous agent worker.
 
----
+## Portal Management Functions
 
-## 🌟 Core Modules & Capabilities
+- **Manage & Track Working Tasks:** Real-time visibility into agent task execution, progressive phases, working logs, and cryptographic artifact delivery.
+- **Credit, Quota & Usage Metering:** Transparent tracking of per-agent token consumption, model pricing tiers, quota policies, and credit allocations.
+- **Dream-Cycle & REM Cognitive Lessons:** Extract, replay, and retain strategic lessons learned from the agent's REM reflection loops for recursive self-improvement.
+- **Pay-to-Use via XRPL Settlement & T54:** Auditable, on-chain micropayment settlement on the XRP Ledger (RLUSD) using [Trust Lines](https://xrpl.org/docs/concepts/tokens/fungible-tokens/trust-lines/) and [Multi-Purpose Tokens (MPT)](https://xrpl.org/docs/concepts/tokens/mpt/), signed securely via the [n-payment](https://github.com/phamdat721101/n-payment) MCP wallet bridge, and relayed through [HyperMove MCP](https://www.hypermove.xyz/).
 
-- 🤖 **Agent Fleet Management**: Centralized registry for multi-host agents (`kiro-cli`, `claude-code`, `adk-python`, `custom`), real-time heartbeats, and 5-stage lifecycle tracking (`Onboarded` ➔ `Dreamed`).
-- 💳 **Credit & Usage Ledger**: Micro-precision token accounting (Gemini input, output, cached prompt, reasoning), billable tool-call pricing, and spending caps.
-- 🛠️ **Skills & Tools Inventory**: Tool governance lifecycle (`active`, `in_audit`, `deprecated`), trigger patterns, and runtime execution telemetry.
-- 💾 **Data Layer & Persistence**: Embedded SQLite with WAL mode (`better-sqlite3`), versioned migrations, atomic file serialization, and reactive React hydration.
-- 🛡️ **Autonomous Auditor Agent**: Evidence-based evaluation (0G Compute LLM + heuristic fallback), real-time SSE stream, and citation-grounded operator chat.
-- 💸 **x402 & HyperMove MCP**: Remote MCP tool bridge, AES-256-GCM encrypted vault, XRPL RLUSD micropayment settlement, and REM Dream Cycle memory archival on 0G Storage.
+## XRPL Technologies & Core Integrations
 
----
+OpenX Agent Portal natively integrates XRP Ledger standards and modular agent services:
 
-## 🚀 Local Quickstart
+### 1. XRP Ledger (XRPL) Technologies
+- **[XRPL Trust Lines](https://xrpl.org/docs/concepts/tokens/fungible-tokens/trust-lines/):** Explicit bidirectional trust relationships enabling accounts to hold and settle issued fungible currencies (such as RLUSD stablecoins) with custom limits and authorized counterparty controls.
+- **[Multi-Purpose Tokens (MPT)](https://xrpl.org/docs/concepts/tokens/mpt/):** Next-generation unidirectional XRPL token standard (XLS-33d / DynamicMPT) providing scalable asset tracking, compact on-chain metadata, and built-in institutional compliance features.
+- **[RLUSD Stablecoin Settlement](https://xrpl.org/docs/concepts/tokens/fungible-tokens/):** Institutional-grade fiat-backed issued currency on XRPL utilized for deterministic, quote-bound pay-to-use agent service payments.
+- **[XRPL AMM (XLS-30)](https://xrpl.org/docs/concepts/tokens/decentralized-exchange/automated-market-makers/):** On-chain Automated Market Maker protocol for observing liquidity depth, orderbook dynamics, and token settlement paths.
+- **[xrpl.js](https://xrpl.org/docs/references/protocol-reference/):** Official ledger client library for cryptographic transaction verification, ledger consensus checks, and receipt auditing.
 
-### 📋 Prerequisites
-- Node.js 18+ & npm 9+
-- Python 3.11+ (`venv` & `pip`)
-- SQLite 3
+### 2. Wallet Service & Key Isolation
+- **[n-payment](https://github.com/phamdat721101/n-payment) (`https://github.com/phamdat721101/n-payment`):** Local-first MCP stdio wallet daemon and XRPL signing service. The OpenX Agent Gateway interfaces with `n-payment` via standard Model Context Protocol tool invocations (`xrpl_pay`, `xrpl_trust_set`), guaranteeing non-custodial key isolation—the `XRPL_SEED` stays strictly inside the host machine environment and is never exposed to Gateway memory, request/response payloads, or network logs.
 
-### ⚡ 1-Command Startup (Recommended)
-Builds and serves both the Gateway and Portal in production mode:
-```bash
-git clone https://github.com/phamdat721101/openx-portal.git
-cd openx-portal
-./start.sh
-```
-- 🌐 **Portal Studio**: `http://localhost:3010`
-- ⚡ **Gateway API**: `http://localhost:7411`
-- 🩺 **Health Check**: `http://localhost:7411/health`
+### 3. Facilitator & Telemetry Network
+- **[HyperMove MCP](https://www.hypermove.xyz/) (`https://www.hypermove.xyz/`):** Facilitator relay and agent telemetry infrastructure powered by HyperMove, providing upstream quote generation, telemetry verification, and execution monitoring.
 
-### 🔧 Manual Component Setup
+## AI-Native Architecture & Code Structure
 
-#### 1. Gateway Sidecar (:7411)
-```bash
-cd gateway
-cp .env.example .env
-npm install
-npm test
-npm run dev
-```
-
-#### 2. Analyst Portal (:3010)
-```bash
-cd portal
-cp .env.example .env.local
-npm install
-npm run dev
+```text
+xrpl-openx-portal/
+├── agent/                  # Autonomous Agent Runtime
+│   ├── main.py             # Agent execution entrypoint & task loops
+│   ├── sync_agent.py       # Telemetry, heartbeats & working-log sync
+│   └── gateway_client.py   # Gateway client (tasks, telemetry, settlements)
+├── gateway/                # Control Plane Sidecar (:7411)
+│   ├── src/server.ts       # REST & telemetry endpoints
+│   ├── src/db/             # Embedded SQLite schema & task/settlement ledgers
+│   └── src/services/       # Agent registry, XRPL settlement (Trustlines/MPTs), n-payment MCP bridge, Dream/HyperMove client
+├── portal/                 # Operator Studio (:3010)
+│   ├── src/app/            # Next.js App Router (Studio hub, agent tabs, docs)
+│   ├── src/components/     # Dashboards (Dream-Cycle, Tasks, Skills, Wallet)
+│   └── src/lib/            # Portal context, auth & gateway RPC client
+├── docs/                   # System maps, architectural specs & PRDs
+└── .nim/                   # Reliability harness: lessons store & delivery contracts
 ```
 
-#### 3. Python ADK Agent
+## Run Locally
+
+Requirements: Node.js 18+ and npm. Python 3.11+ is needed only for the optional agent worker.
+
+Install dependencies and start the Gateway and Portal in separate terminals:
+
+```bash
+npm --prefix gateway install
+npm --prefix portal install
+npm --prefix gateway run dev
+```
+
+```bash
+npm --prefix portal run dev
+```
+
+- Portal: http://localhost:3010
+- Gateway health: http://localhost:7411/health
+
+To run the example connected agent, copy its environment template, set `OPENX_AGENT_KEY`, and run:
+
 ```bash
 cd agent
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 python3 main.py
 ```
 
----
+*Alternative launcher:* `./start.sh` installs missing dependencies, builds both services, and replaces processes on ports 3010 and 7411.
 
-## 📄 License
+## Checks
 
-MIT License. Copyright (c) 2026 OpenX Network.
-
+```bash
+npm --prefix gateway test
+npm --prefix gateway run build
+npm --prefix portal run typecheck
+```

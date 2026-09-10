@@ -26,9 +26,13 @@ import { dreamState, hyperMove, McpError, DreamRun, ManagedLesson } from './serv
 import { usageLedger } from './services/usageLedger.js';
 import { xrplTestnetSettlement } from './services/xrplSettlement.js';
 import { nPaymentXrplWallet } from './services/nPaymentXrplWallet.js';
+import { xrplNativeService } from './services/xrplNativeService.js';
 import { walletService } from './services/walletService.js';
 import { auditorService } from './services/auditorService.js';
 import { agentKnowledgeArchive, KnowledgeInput } from './services/agentKnowledgeArchive.js';
+import { statementTracking } from './services/statementTracking.js';
+import { statementExecution } from './services/statementExecution.js';
+import { gatewayDatabase } from './db/database.js';
 import { SkillLifecycleStatus } from './types/agentIngestion.js';
 
 dotenv.config();
@@ -37,8 +41,52 @@ export const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 7411;
 const HOST = process.env.OPENX_GATEWAY_HOST || '0.0.0.0';
 
-app.use(cors());
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost:3010', 'http://localhost:3000', 'http://127.0.0.1:3010', 'http://127.0.0.1:3000'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (process.env.NODE_ENV !== 'production') return callback(null, true);
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    return callback(new Error('CORS origin not allowed'));
+  },
+  credentials: true,
+}));
 app.use(express.json());
+
+// In-memory sliding-window rate limiter for sensitive endpoints
+interface RateLimitEntry { count: number; resetAt: number; }
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const createRateLimiter = (maxRequests: number, windowMs: number, keyPrefix: string) => {
+  return (req: Request, res: Response, next: () => void) => {
+    if (process.env.NODE_ENV === 'test') return next();
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const key = `${keyPrefix}:${ip}`;
+    const now = Date.now();
+    const entry = rateLimitMap.get(key);
+    if (!entry || entry.resetAt <= now) {
+      rateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (entry.count >= maxRequests) {
+      res.status(429).json({
+        ok: false,
+        error: 'rate_limit_exceeded',
+        message: `Too many requests. Please try again in ${Math.ceil((entry.resetAt - now) / 1000)} seconds.`,
+      });
+      return;
+    }
+    entry.count += 1;
+    next();
+  };
+};
+
+const registerLimiter = createRateLimiter(30, 60_000, 'reg');
+const rotateKeyLimiter = createRateLimiter(15, 60_000, 'rotate');
 
 // Zod Schemas for Ingestion Endpoints
 const TelemetrySchema = z.object({
@@ -55,6 +103,7 @@ const TelemetrySchema = z.object({
   current_phase: z.string().trim().max(120).optional(),
   progress_pct: z.number().min(0).max(100).optional(),
   summary: z.string().trim().max(240).optional(),
+  deliverable_markdown: z.string().max(200_000).optional(),
 }).strict();
 
 const AgentRegisterSchema = z.object({
@@ -78,6 +127,14 @@ const AgentSyncSchema = z.object({
 const AgentClaimSchema = z.object({
   agent_id: z.string().uuid(),
   agent_key: z.string().trim().min(20).max(256),
+}).strict();
+const AgentRotateKeySchema = z.object({
+  agent_id: z.string().uuid(),
+  current_agent_key: z.string().trim().min(20).max(256).optional(),
+}).strict();
+const AgentRevokeSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_key: z.string().trim().min(20).max(256).optional(),
 }).strict();
 
 const MemoryEpisodeSchema = z.object({
@@ -124,11 +181,31 @@ const DreamTriggerSchema = z.object({ preset: z.enum(['frugal', 'balanced', 'tho
 const XrplSettlementProofSchema = z.object({ transaction_hash: z.string().regex(/^[A-Fa-f0-9]{64}$/), expected_amount: z.string().regex(/^\d+(\.\d+)?$/) }).strict();
 const DreamCredentialSchema = z.object({ token: z.string().trim().min(20).max(4096) });
 const DreamSetupSchema = z.object({ token: z.string().trim().min(20).max(4096).optional(), hypermove_agent_id: z.string().trim().min(1).max(160).optional() }).strict();
+const AgentSettlementSyncSchema = z.object({
+  transaction_hash: z.string().regex(/^[A-Fa-f0-9]{64}$/, 'Invalid 64-character transaction hash'),
+  quote_id: z.string().min(1),
+  amount: z.string().min(1),
+  currency: z.string().default('RLUSD'),
+  merchant_address: z.string().regex(/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/, 'Invalid XRPL merchant address'),
+  facilitator_node: z.string().min(1),
+  status: z.enum(['settled', 'pending', 'failed', 'validated']).default('settled'),
+  network: z.string().optional(),
+  run_id: z.string().optional(),
+  settled_at: z.string().optional(),
+  error_reason: z.string().optional(),
+}).strict();
 const SkillStatusSchema = z.object({ status: z.enum(['active', 'in_audit', 'deprecated']) }).strict();
 const AuditorChatSchema = z.object({ message: z.string().trim().min(1).max(1200), client_request_id: z.string().trim().min(1).max(120).optional() }).strict();
 const WebMcpNavigationSchema = z.object({ section: z.enum(['studio', 'skills', 'credit-model', 'dream-cycle', 'auditor']) }).strict();
 const LessonSchema = z.object({ content: z.string().trim().min(1).max(4000), source: z.enum(['manual', 'dream_cycle']).default('manual') });
 const LessonResolutionSchema = z.object({ action: z.enum(['PROMOTED_CONSTRAINT', 'QUARANTINED', 'REJECTED']) });
+const WalletProfileSchema = z.object({ profile_id: z.string().trim().min(1).max(160), address: z.string().trim().regex(/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/).optional(), daily_limit_rlusd: z.string().regex(/^\d+(\.\d+)?$/).default('100'), per_tx_limit_rlusd: z.string().regex(/^\d+(\.\d+)?$/).default('5') }).strict();
+const TrustLineSchema = z.object({ limit: z.string().regex(/^\d+(\.\d+)?$/).default('1000000') }).strict();
+const RoutingPolicySchema = z.object({ rules: z.array(z.object({ category: z.string().trim().min(1).max(80), model: z.string().trim().min(1).max(160), minimum_samples: z.number().int().min(20).default(20) }).strict()).min(1).max(30) }).strict();
+const WorkingLogSchema = z.object({ event_id: z.string().uuid(), sequence: z.number().int().nonnegative(), phase: z.string().trim().min(1).max(120), progress_pct: z.number().min(0).max(100).optional(), kind: z.enum(['started', 'phase', 'decision', 'artifact', 'error', 'completed', 'failed']), markdown: z.string().trim().min(1).max(64_000).refine((value) => !/<[^>]*>/i.test(value), 'raw_html_not_allowed'), created_at: z.string().datetime() }).strict();
+const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_hash: z.string().regex(/^[a-f0-9]{64}$/i), visibility: z.enum(['private', 'public']), source_chain: z.string().trim().min(1).max(80), source_block: z.string().trim().min(1).max(80), source_timestamp: z.string().datetime(), finality: z.enum(['finalized', 'pending']), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(), venue: z.string().trim().min(1).max(120), collateral_usd: z.number().nonnegative().max(1e12), debt_usd: z.number().nonnegative().max(1e12), realized_pnl_usd: z.number().finite().optional(), unrealized_pnl_usd: z.number().finite().optional(), pnl_methodology: z.string().trim().min(1).max(500), status: z.enum(['received', 'partial', 'failed']).optional(), summary: z.string().trim().max(2000).optional(), attestation: z.object({ status: z.enum(['pending', 'verified', 'unavailable_source_chain', 'failed']), chain: z.string().trim().max(80).optional(), receipt: z.string().trim().max(1000).optional() }).strict().optional() }).strict().refine((value) => value.collateral_usd === 0 ? value.debt_usd === 0 : value.debt_usd / value.collateral_usd <= .4, 'LTV exceeds configured 40% maximum');
+const StatementExecutionPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/) }).strict();
+const StatementExecutionSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
 
 type DreamPaymentQuote = { quote_id: string; amount: string; currency: string; destination: string; issuer: string; nonce: string; expires_at?: string };
 const paymentQuoteFrom = (value: unknown): DreamPaymentQuote | undefined => {
@@ -410,7 +487,7 @@ const enqueueKnowledge = (agentId: string, input: KnowledgeInput): void => {
   void agentKnowledgeArchive.processPending(agentId);
 };
 
-app.post('/v1/agent/register', (req: Request, res: Response): void => {
+app.post('/v1/agent/register', registerLimiter, (req: Request, res: Response): void => {
   const parsed = AgentRegisterSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ ok: false, error: 'invalid_payload', message: parsed.error.errors.map((error) => `${error.path.join('.')}: ${error.message}`).join(', ') });
@@ -450,6 +527,63 @@ app.post('/v1/agent/claim', (req: Request, res: Response): void => {
   } catch (error) {
     if (error instanceof AgentRegistryError) { res.status(error.status).json({ ok: false, error: error.code }); return; }
     res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+/**
+ * POST /v1/agent/rotate-key
+ * Rotates the API credential for an existing agent, invalidating the previous one.
+ */
+app.post('/v1/agent/rotate-key', rotateKeyLimiter, (req: Request, res: Response): void => {
+  const parsed = AgentRotateKeySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, error: 'invalid_payload', message: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ') });
+    return;
+  }
+  const keyHeader = req.headers['x-agent-key'];
+  const currentKey = parsed.data.current_agent_key || (typeof keyHeader === 'string' ? keyHeader : undefined);
+  try {
+    const result = agentRegistry.rotateCredential(parsed.data.agent_id, currentKey);
+    res.json({
+      ok: true,
+      agent: result.agent,
+      credential: {
+        agent_key: result.credential,
+        rotated_at: result.agent.credential_last_rotated_at,
+        warning: 'This key is displayed only once. Store it in your agent environment immediately.',
+      },
+      message: 'Agent key rotated successfully',
+    });
+  } catch (error) {
+    if (error instanceof AgentRegistryError) {
+      res.status(error.status).json({ ok: false, error: error.code, message: error.code.replace(/_/g, ' ') });
+      return;
+    }
+    res.status(500).json({ ok: false, error: 'internal_error', message: 'Unable to rotate agent key' });
+  }
+});
+
+/**
+ * POST /v1/agent/revoke
+ * Revokes an agent identity, permanently disabling future writes.
+ */
+app.post('/v1/agent/revoke', (req: Request, res: Response): void => {
+  const parsed = AgentRevokeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, error: 'invalid_payload', message: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ') });
+    return;
+  }
+  const keyHeader = req.headers['x-agent-key'];
+  const key = parsed.data.agent_key || (typeof keyHeader === 'string' ? keyHeader : undefined);
+  try {
+    const agent = agentRegistry.revoke(parsed.data.agent_id, key);
+    res.json({ ok: true, agent, message: 'Agent identity revoked' });
+  } catch (error) {
+    if (error instanceof AgentRegistryError) {
+      res.status(error.status).json({ ok: false, error: error.code, message: error.code.replace(/_/g, ' ') });
+      return;
+    }
+    res.status(500).json({ ok: false, error: 'internal_error', message: 'Unable to revoke agent' });
   }
 });
 
@@ -628,6 +762,104 @@ app.get('/v1/agents/:agentId/activity', (req: Request, res: Response): void => {
   const limit = Number(req.query.limit) || 20;
   res.json({ ok: true, agent_id: agent.agent_id, activity: agentIngestionStore.getTaskActivity(agent.agent_id), history: agentIngestionStore.getTaskHistory(agent.agent_id, limit) });
 });
+app.get('/v1/agents/:agentId/tasks', (req: Request, res: Response): void => { if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; } res.json({ ok: true, tasks: agentIngestionStore.getStoredTaskRuns(req.params.agentId, Number(req.query.limit) || 50) }); });
+app.get('/v1/agents/:agentId/tasks/:taskId', (req: Request, res: Response): void => { const task = agentIngestionStore.getStoredTaskRun(req.params.agentId, req.params.taskId); if (!task) { res.status(404).json({ ok: false, error: 'task_not_found' }); return; } res.json({ ok: true, task, working_log: agentIngestionStore.getWorkingLog(req.params.agentId, req.params.taskId) }); });
+app.post('/v1/agents/:agentId/tasks/:taskId/working-log', (req: Request, res: Response): void => { const parsed = WorkingLogSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; } if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; } const result = agentIngestionStore.recordWorkingLog(req.params.agentId, req.params.taskId, parsed.data); res.status(result.accepted ? 201 : 200).json({ ok: true, ...result }); });
+
+app.post('/v1/agents/:agentId/settlements', (req: Request, res: Response): void => {
+  const parsed = AgentSettlementSyncSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, error: 'invalid_payload', details: parsed.error.issues });
+    return;
+  }
+  if (!agentRegistry.get(req.params.agentId)) {
+    res.status(404).json({ ok: false, error: 'agent_not_found' });
+    return;
+  }
+  const agentKey = agentKeyFor(req);
+  if (!agentKey || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKey)) {
+    res.status(401).json({ ok: false, error: 'invalid_agent_key' });
+    return;
+  }
+  const rawStatus = parsed.data.status;
+  const normalizedStatus: 'settled' | 'pending' | 'failed' = rawStatus === 'validated' ? 'settled' : rawStatus;
+  const settlement = dreamState.recordSettlement({
+    ...parsed.data,
+    status: normalizedStatus,
+    openx_agent_id: req.params.agentId,
+  });
+  res.status(201).json({ ok: true, settlement });
+});
+
+/** Agent-owned research push. Gateway persists a safe projection and archives the canonical report in 0G. */
+app.post('/v1/agents/:agentId/statements', (req: Request, res: Response): void => {
+  const parsed = StatementReportSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_statement_report', details: parsed.error.issues }); return; }
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; }
+  try {
+    const result = statementTracking.ingest(req.params.agentId, parsed.data);
+    enqueueKnowledge(req.params.agentId, { source_type: 'position_statement', source_id: result.record.report_id, payload: result.record });
+    res.status(result.created ? 201 : 200).json({ ok: true, created: result.created, report: result.record, knowledge_sync: agentKnowledgeArchive.status(req.params.agentId) });
+  } catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'statement_report_conflict' }); }
+});
+app.get('/v1/agents/:agentId/statements/latest', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; }
+  const report = statementTracking.latest(req.params.agentId); if (!report) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
+  res.json({ ok: true, report });
+});
+app.get('/v1/statements/leaderboard', (req: Request, res: Response): void => { res.json({ ok: true, reports: statementTracking.leaderboard(Number(req.query.limit) || 25) }); });
+
+/** Browser-wallet commitment flow. The Gateway verifies every receipt before it records it. */
+app.post('/v1/agents/:agentId/statements/:reportId/executions/prepare', (req: Request, res: Response): void => {
+  const parsed = StatementExecutionPrepareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_execution_request' }); return; }
+  const report = statementTracking.latest(req.params.agentId);
+  if (!report || report.report_id !== req.params.reportId) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
+  if (!statementExecution.isConfigured()) { res.status(409).json({ ok: false, error: 'statement_execution_not_configured' }); return; }
+  try { const result = statementExecution.prepare(req.params.agentId, report.report_id, report.content_hash, parsed.data.wallet_address); res.status(201).json({ ok: true, ...result }); }
+  catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'statement_execution_prepare_failed' }); }
+});
+app.post('/v1/agents/:agentId/statements/executions/:executionId/submit', async (req: Request, res: Response): Promise<void> => {
+  const parsed = StatementExecutionSubmitSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_execution_submission' }); return; }
+  const execution = statementExecution.get(req.params.executionId);
+  if (!execution || execution.agent_id !== req.params.agentId) { res.status(404).json({ ok: false, error: 'statement_execution_not_found' }); return; }
+  try { res.json({ ok: true, execution: await statementExecution.verifyAndAnchor(execution.id, parsed.data.transaction_hash) }); }
+  catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'statement_execution_verification_failed' }); }
+});
+app.post('/v1/agents/:agentId/statements/executions/:executionId/retry-attestation', async (req: Request, res: Response): Promise<void> => {
+  const execution = statementExecution.get(req.params.executionId);
+  if (!execution || execution.agent_id !== req.params.agentId) { res.status(404).json({ ok: false, error: 'statement_execution_not_found' }); return; }
+  try { res.json({ ok: true, execution: await statementExecution.retryAttestation(execution.id) }); }
+  catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'statement_execution_retry_failed' }); }
+});
+app.get('/v1/agents/:agentId/statements/executions/latest', (req: Request, res: Response): void => {
+  const report = statementTracking.latest(req.params.agentId);
+  if (!report) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
+  const row = gatewayDatabase.raw().prepare('SELECT id FROM statement_executions WHERE agent_id=? AND report_id=? ORDER BY updated_at DESC LIMIT 1').get(req.params.agentId, report.report_id) as { id?: string } | undefined;
+  res.json({ ok: true, configured: statementExecution.isConfigured(), execution: row?.id ? statementExecution.get(row.id) : null });
+});
+
+app.delete('/v1/agents/:agentId/settlements/:txHashOrQuoteId', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) {
+    res.status(404).json({ ok: false, error: 'agent_not_found' });
+    return;
+  }
+  const agentKey = agentKeyFor(req);
+  if (!agentKey || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKey)) {
+    res.status(401).json({ ok: false, error: 'invalid_agent_key' });
+    return;
+  }
+  const removed = dreamState.removeSettlement(req.params.txHashOrQuoteId);
+  res.json({ ok: true, removed });
+});
+app.get('/v1/agents/:agentId/wallet/profile', (req: Request, res: Response): void => { if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; } res.json({ ok: true, profile: xrplNativeService.profile(req.params.agentId), configured: nPaymentXrplWallet.isConfigured() }); });
+app.put('/v1/agents/:agentId/wallet/profile', (req: Request, res: Response): void => { const parsed = WalletProfileSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; } if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; } const data = parsed.data; res.status(201).json({ ok: true, profile: xrplNativeService.createProfile(req.params.agentId, data.profile_id, data.address || null, { daily: data.daily_limit_rlusd, perTx: data.per_tx_limit_rlusd }) }); });
+app.post('/v1/agents/:agentId/wallet/trustline', async (req: Request, res: Response): Promise<void> => { const parsed = TrustLineSchema.safeParse(req.body); const profile = xrplNativeService.profile(req.params.agentId) as { profile_id?: string } | null; if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } if (!profile?.profile_id) { res.status(409).json({ ok: false, error: 'wallet_profile_not_configured' }); return; } if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; } const issuer = process.env.OPENX_RLUSD_ISSUER; if (!issuer) { res.status(409).json({ ok: false, error: 'rlusd_issuer_not_configured' }); return; } try { const receipt = await nPaymentXrplWallet.ensureRlusdTrustLine(profile.profile_id, issuer, parsed.data.limit); const operation = xrplNativeService.recordOperation(req.params.agentId, 'trustline', receipt.validated ? 'validated' : 'submitted', { issuer, no_ripple: true, limit: parsed.data.limit }, undefined, receipt.transaction_hash); res.status(201).json({ ok: true, receipt, operation }); } catch (error) { res.status(502).json({ ok: false, error: error instanceof Error ? error.message : 'n_payment_trustline_failed' }); } });
+app.get('/v1/agents/:agentId/routing-policy', (req: Request, res: Response): void => { if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'agent_not_found' }); return; } res.json({ ok: true, policy: xrplNativeService.latestPolicy(req.params.agentId) }); });
+app.put('/v1/agents/:agentId/routing-policy', (req: Request, res: Response): void => { const parsed = RoutingPolicySchema.safeParse(req.body); if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; } if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; } res.status(201).json({ ok: true, policy: xrplNativeService.publishPolicy(req.params.agentId, parsed.data.rules) }); });
+app.post('/v1/agents/:agentId/routing-policy/:policyId/ack', (req: Request, res: Response): void => { if (!agentKeyFor(req) || !agentRegistry.authorizeTelemetry(req.params.agentId, agentKeyFor(req))) { res.status(401).json({ ok: false, error: 'invalid_agent_key' }); return; } const policy = xrplNativeService.acknowledgePolicy(req.params.agentId, req.params.policyId); if (!policy) { res.status(404).json({ ok: false, error: 'policy_not_found' }); return; } res.json({ ok: true, policy }); });
 
 /** Connected-agent capability and candidate-skill catalog; intentionally metadata-only. */
 app.get('/v1/agents/:agentId/skills', (req: Request, res: Response): void => {
@@ -716,6 +948,26 @@ app.post('/v1/settlement/xrpl-testnet/verify', async (req: Request, res: Respons
   if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_payload' }); return; }
   const result = await xrplTestnetSettlement.verifyServicePayment(parsed.data.transaction_hash, parsed.data.expected_amount);
   res.status(result.verified ? 200 : 409).json({ ok: result.verified, ...result, service_payment_only: true });
+});
+
+/**
+ * GET /v1/settlement/history
+ * Returns the history of settled XRPL RLUSD payments for transparency and tracking.
+ */
+app.get('/v1/settlement/history', (req: Request, res: Response): void => {
+  const agentId = typeof req.query.agent_id === 'string'
+    ? req.query.agent_id.trim()
+    : typeof req.query.agentId === 'string'
+    ? req.query.agentId.trim()
+    : undefined;
+  const settlements = dreamState.listSettlements(agentId);
+  res.json({
+    ok: true,
+    network: 'xrpl-testnet',
+    currency: 'RLUSD',
+    count: settlements.length,
+    settlements,
+  });
 });
 
 app.post('/v1/agents/:agentId/dream/link', async (req: Request, res: Response): Promise<void> => {
@@ -853,20 +1105,20 @@ app.post('/v1/agents/:agentId/dream/trigger', async (req: Request, res: Response
         const verified = await xrplTestnetSettlement.verifyQuotePayment(receipt.transaction_hash, quote);
         if (!receipt.validated || !verified.verified || !dreamState.claimSettlement(quote.quote_id, receipt.transaction_hash)) {
           const reason = verified.reason || 'settlement_replay_or_unvalidated';
-          res.status(409).json({ ok: false, error: reason, run: dreamState.updateRun(run.id, { status: 'failed', settlement: { status: 'failed', quote_id: quote.quote_id, transaction_hash: receipt.transaction_hash, amount: quote.amount, currency: 'RLUSD', destination: quote.destination, attempted_at: new Date().toISOString(), reason } }) }); return;
+          res.status(409).json({ ok: false, error: reason, run: dreamState.updateRun(run.id, { status: 'failed', settlement: { status: 'failed', quote_id: quote.quote_id, transaction_hash: receipt.transaction_hash, amount: quote.amount, currency: 'RLUSD', destination: quote.destination, merchant_address: quote.destination, facilitator_node: process.env.OPENX_FACILITATOR_NODE || 'hypermove-gateway-relay', attempted_at: new Date().toISOString(), reason } }) }); return;
         }
         await hyperMove.call('payments.settle', { quoteId: quote.quote_id, proof: receipt.transaction_hash }, mcpTokenFor(req.params.agentId));
         const result = await hyperMove.call('start_dream', { agent_id: link.hypermove_agent_id, config: { budget_usd: parsed.data.budget_usd, preset: parsed.data.preset } }, mcpTokenFor(req.params.agentId), { 'x-payment': receipt.transaction_hash, 'x-payment-quote-id': quote.quote_id });
         const finished = result?.status === 'completed' || result?.status === 'partial';
         persistDreamLessons(req.params.agentId, run.id, result);
-        const settlement = { status: 'settled' as const, quote_id: quote.quote_id, transaction_hash: receipt.transaction_hash, amount: quote.amount, currency: 'RLUSD' as const, destination: quote.destination, attempted_at: new Date().toISOString() };
+        const settlement = { status: 'settled' as const, quote_id: quote.quote_id, transaction_hash: receipt.transaction_hash, amount: quote.amount, currency: 'RLUSD' as const, destination: quote.destination, merchant_address: quote.destination, facilitator_node: process.env.OPENX_FACILITATOR_NODE || 'hypermove-gateway-relay', attempted_at: new Date().toISOString() };
         const updated = dreamState.updateRun(run.id, { status: finished ? 'completed' : 'running', ...(finished ? { completed_at: new Date().toISOString() } : {}), settlement, result, learning_brief: learningBriefFrom(result) });
         queueDreamAudit(updated);
         if (updated?.status === 'running') scheduleDreamReconciliation(updated.id);
         res.status(202).json({ ok: true, run: updated }); return;
       } catch (settlementError) {
         const reason = settlementError instanceof Error ? settlementError.message : 'settlement_failed';
-        res.status(502).json({ ok: false, error: 'settlement_failed', message: reason, run: dreamState.updateRun(run.id, { status: 'failed', error: reason, settlement: { status: 'failed', quote_id: quote.quote_id, amount: quote.amount, currency: 'RLUSD', destination: quote.destination, attempted_at: new Date().toISOString(), reason } }) }); return;
+        res.status(502).json({ ok: false, error: 'settlement_failed', message: reason, run: dreamState.updateRun(run.id, { status: 'failed', error: reason, settlement: { status: 'failed', quote_id: quote.quote_id, amount: quote.amount, currency: 'RLUSD', destination: quote.destination, merchant_address: quote.destination, facilitator_node: process.env.OPENX_FACILITATOR_NODE || 'hypermove-gateway-relay', attempted_at: new Date().toISOString(), reason } }) }); return;
       }
     }
     dreamState.updateRun(run.id, { status: 'failed', error: error instanceof Error ? error.message : 'Dream request failed' }); respondMcpError(res, error);

@@ -25,4 +25,35 @@ describe('Agent registry', () => {
     expect(second.agent.agent_id).toBe(first.agent.agent_id);
     expect(second.agent.slug).toBe(first.agent.slug);
   });
+
+  it('rotates agent credential, invalidating the previous one and updating rotation timestamp', () => {
+    const registry = new AgentRegistry({ mode: 'production' });
+    const registration = registry.register({ display_name: 'Key Rotation Target', host_type: 'custom' });
+    const agentId = registration.agent.agent_id;
+    const oldKey = registration.credential!;
+
+    expect(() => registry.rotateCredential(agentId, 'wrong-key-that-is-long-enough')).toThrow();
+
+    const rotation = registry.rotateCredential(agentId, oldKey);
+    expect(rotation.credential).toMatch(/^oxag_/);
+    expect(rotation.credential).not.toBe(oldKey);
+    expect(rotation.agent.credential_last_rotated_at).toBeDefined();
+
+    // Old key must no longer authorize writes
+    expect(registry.authorizeTelemetry(agentId, oldKey)).toBe(false);
+    // New key must authorize writes
+    expect(registry.authorizeTelemetry(agentId, rotation.credential)).toBe(true);
+  });
+
+  it('revokes an agent and prevents future authentication', () => {
+    const registry = new AgentRegistry({ mode: 'production' });
+    const registration = registry.register({ display_name: 'Revocation Target', host_type: 'custom' });
+    const agentId = registration.agent.agent_id;
+    const key = registration.credential!;
+
+    const revoked = registry.revoke(agentId, key);
+    expect(revoked.state).toBe('revoked');
+    expect(registry.authorizeTelemetry(agentId, key)).toBe(false);
+    expect(() => registry.rotateCredential(agentId, key)).toThrow();
+  });
 });

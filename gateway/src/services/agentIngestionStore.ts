@@ -13,6 +13,7 @@ import {
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { gatewayDatabase } from '../db/database.js';
+import { createHash } from 'node:crypto';
 
 interface StoredTelemetry extends AgentTelemetryPayload {
   id: string;
@@ -63,6 +64,8 @@ class AgentIngestionStore {
     if (list.length > 100) list.pop();
     this.telemetryByAgent.set(agentId, list);
     this.persist();
+    const deliverable = payload.deliverable_markdown || null;
+    gatewayDatabase.raw().prepare('INSERT INTO xrpl_task_runs(id, agent_id, task_id, title, category, model, state, input_tokens, latency_ms, deliverable_markdown, deliverable_sha256, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, task_id) DO UPDATE SET title=excluded.title,category=excluded.category,model=excluded.model,state=excluded.state,input_tokens=excluded.input_tokens,latency_ms=excluded.latency_ms,deliverable_markdown=COALESCE(excluded.deliverable_markdown,xrpl_task_runs.deliverable_markdown),deliverable_sha256=COALESCE(excluded.deliverable_sha256,xrpl_task_runs.deliverable_sha256),completed_at=excluded.completed_at').run(item.id, agentId, item.task_id, item.task_title || null, item.task_category || null, item.model, item.task_state || (item.status === 'failed' ? 'failed' : 'completed'), item.tokens_consumed, item.latency_ms || 0, deliverable, deliverable ? createHash('sha256').update(deliverable).digest('hex') : null, item.received_at, item.task_state === 'completed' || item.task_state === 'failed' || item.status === 'failed' ? item.received_at : null);
 
     return item;
   }
@@ -197,6 +200,14 @@ class AgentIngestionStore {
     for (const event of telemetry) if (!latestByTask.has(event.task_id)) latestByTask.set(event.task_id, event);
     return Array.from(latestByTask.values()).map((event) => this.projectTask(event, telemetry, staleAfterSeconds)).slice(0, Math.max(1, Math.min(limit, 50)));
   }
+
+  public getStoredTaskRuns(agentId: string, limit = 50) { return gatewayDatabase.raw().prepare('SELECT id, task_id, title, category, model, state, input_tokens, latency_ms, deliverable_markdown, deliverable_sha256, created_at, completed_at FROM xrpl_task_runs WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?').all(agentId, Math.max(1, Math.min(limit, 100))); }
+  public getStoredTaskRun(agentId: string, taskId: string) { return gatewayDatabase.raw().prepare('SELECT id, task_id, title, category, model, state, input_tokens, latency_ms, deliverable_markdown, deliverable_sha256, created_at, completed_at FROM xrpl_task_runs WHERE agent_id = ? AND task_id = ?').get(agentId, taskId) || null; }
+  public recordWorkingLog(agentId: string, taskId: string, entry: { event_id: string; sequence: number; phase: string; progress_pct?: number; kind: string; markdown: string; created_at: string }) {
+    const result = gatewayDatabase.raw().prepare('INSERT OR IGNORE INTO xrpl_task_log_entries(event_id, agent_id, task_id, sequence, phase, progress_pct, kind, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(entry.event_id, agentId, taskId, entry.sequence, entry.phase, entry.progress_pct ?? null, entry.kind, entry.markdown, entry.created_at);
+    return { accepted: result.changes > 0, duplicate: result.changes === 0 };
+  }
+  public getWorkingLog(agentId: string, taskId: string) { return gatewayDatabase.raw().prepare('SELECT event_id, sequence, phase, progress_pct, kind, markdown, created_at FROM xrpl_task_log_entries WHERE agent_id = ? AND task_id = ? ORDER BY sequence ASC').all(agentId, taskId); }
 
   public clear() {
     this.telemetryByAgent.clear();

@@ -76,6 +76,29 @@ describe('Gateway Ingestion & Telemetry APIs (PRD Ingestion Tests)', () => {
     });
   });
 
+  describe('working-log persistence', () => {
+    it('keeps ordered task entries and ignores duplicate event ids', () => {
+      const entry = { event_id: '550e8400-e29b-41d4-a716-446655440000', sequence: 1, phase: 'collecting', progress_pct: 25, kind: 'phase', markdown: 'Collected safe sources.', created_at: '2026-09-04T00:00:00.000Z' };
+      expect(agentIngestionStore.recordWorkingLog('task-agent', 'task-log-1', entry)).toMatchObject({ accepted: true, duplicate: false });
+      expect(agentIngestionStore.recordWorkingLog('task-agent', 'task-log-1', entry)).toMatchObject({ accepted: false, duplicate: true });
+      expect(agentIngestionStore.getWorkingLog('task-agent', 'task-log-1')).toEqual([expect.objectContaining({ sequence: 1, markdown: 'Collected safe sources.' })]);
+    });
+
+    // seam:task-log-ingestion
+    it('accepts an authenticated log entry and returns it with the task detail', async () => {
+      const agentId = 'task-log-route-agent';
+      const taskId = 'task-log-route-1';
+      await request(app).post('/v1/agent/telemetry').set('x-agent-key', 'development-key').send({ agent_id: agentId, task_id: taskId, model: 'gemini-3.5', status: 'success', task_state: 'started' });
+      const created = await request(app).post(`/v1/agents/${agentId}/tasks/${taskId}/working-log`).set('x-agent-key', 'development-key').send({ event_id: '550e8400-e29b-41d4-a716-446655440001', sequence: 1, phase: 'collecting', progress_pct: 25, kind: 'phase', markdown: 'Collected safe sources.', created_at: '2026-09-04T00:00:00.000Z' });
+      expect(created.status).toBe(201);
+      const unsafe = await request(app).post(`/v1/agents/${agentId}/tasks/${taskId}/working-log`).set('x-agent-key', 'development-key').send({ event_id: '550e8400-e29b-41d4-a716-446655440002', sequence: 2, phase: 'collecting', kind: 'phase', markdown: '<script>unsafe</script>', created_at: '2026-09-04T00:00:00.000Z' });
+      expect(unsafe.status).toBe(400);
+      const detail = await request(app).get(`/v1/agents/${agentId}/tasks/${taskId}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.working_log).toEqual([expect.objectContaining({ sequence: 1, markdown: 'Collected safe sources.' })]);
+    });
+  });
+
   describe('POST /v1/agent/memory/episode', () => {
     it('ingests research episode and updates memory summary in GET /v1/agent/status', async () => {
       const episode = {

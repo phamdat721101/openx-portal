@@ -223,6 +223,25 @@ def submit_telemetry(
     )
 
 
+def submit_working_log(
+    agent_id: str,
+    task_id: str,
+    event_id: str,
+    sequence: int,
+    phase: str,
+    kind: str,
+    markdown: str,
+    progress_pct: Optional[float] = None,
+    created_at: Optional[str] = None,
+    timeout_seconds: float = 5.0,
+) -> Dict[str, Any]:
+    """Publish a redacted, ordered task-log event; Gateway deduplicates event_id."""
+    payload: Dict[str, Any] = {"event_id": event_id, "sequence": sequence, "phase": phase, "kind": kind, "markdown": markdown, "created_at": created_at or time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
+    if progress_pct is not None:
+        payload["progress_pct"] = progress_pct
+    return _post_json(f"/v1/agents/{urllib.parse.quote(agent_id, safe='')}/tasks/{urllib.parse.quote(task_id, safe='')}/working-log", payload, error_code="working_log_submission_failed", timeout_seconds=timeout_seconds, require_key=True)
+
+
 def submit_usage_event(
     event_id: str,
     agent_id: str,
@@ -363,4 +382,54 @@ def request_gated_feed(feed_id: str) -> dict:
     raise NotImplementedError(
         "Phase 2 x402 payment flow is being wired. See gateway/ for the Node-side sidecar "
         f"(target URL: {_gateway_url()}/v1/supplier/defi?feedId={feed_id})."
+    )
+
+
+def sync_settlement(
+    agent_id: str,
+    transaction_hash: str,
+    quote_id: str,
+    amount: str,
+    merchant_address: str,
+    facilitator_node: str,
+    currency: str = "RLUSD",
+    status: str = "settled",
+    run_id: Optional[str] = None,
+    settled_at: Optional[str] = None,
+    error_reason: Optional[str] = None,
+    timeout_seconds: float = 5.0,
+) -> Dict[str, Any]:
+    """Push an on-chain XRPL settlement transaction proof to the OpenX Gateway."""
+    payload: Dict[str, Any] = {
+        "transaction_hash": transaction_hash,
+        "quote_id": quote_id,
+        "amount": amount,
+        "currency": currency,
+        "merchant_address": merchant_address,
+        "facilitator_node": facilitator_node,
+        "status": status,
+    }
+    if run_id:
+        payload["run_id"] = run_id
+    if settled_at:
+        payload["settled_at"] = settled_at
+    if error_reason:
+        payload["error_reason"] = error_reason
+    return _post_json(
+        f"/v1/agents/{urllib.parse.quote(agent_id, safe='')}/settlements",
+        payload,
+        error_code="settlement_sync_failed",
+        timeout_seconds=timeout_seconds,
+        require_key=True,
+    )
+
+
+def submit_statement_report(agent_id: str, report: Dict[str, Any], timeout_seconds: float = 12.0) -> Dict[str, Any]:
+    """Push a validated, non-secret APSD projection; Gateway owns archival and dashboard persistence."""
+    return _post_json(
+        f"/v1/agents/{urllib.parse.quote(agent_id, safe='')}/statements",
+        report,
+        error_code="statement_report_submission_failed",
+        timeout_seconds=timeout_seconds,
+        require_key=True,
     )

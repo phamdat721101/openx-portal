@@ -78,16 +78,18 @@ test('allows an unauthenticated visitor to register and receive a one-time agent
   expect(setupPrompt).toContain('Agent ID: f8b2d1c9-724e-4f16-9562-581335b2df01');
   expect(setupPrompt).not.toContain('oxag_public_one_time_key');
   await expect(page.getByRole('button', { name: 'Copy one-time key' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Copy setup prompt' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy sync prompt' })).toBeVisible();
   console.log('seam:portal-public-registration');
 });
 
 test('offers a reusable secret-free agent connection prompt in Docs', async ({ page }) => {
   await page.goto('/docs');
-  await expect(page.getByRole('heading', { name: 'Agent Connection Prompt' })).toBeVisible();
-  const prompt = await page.locator('pre').filter({ hasText: 'Connect this agent to the OpenX Portal' }).textContent();
-  expect(prompt).toContain('Gateway URL: https://');
-  expect(prompt).toContain('Deployed gateway');
+  await expect(page.getByRole('heading', { name: 'Agent connection & data-sync prompt' })).toBeVisible();
+  const prompt = await page.locator('pre').filter({ hasText: 'Connect and synchronize this agent with the OpenX Portal' }).textContent();
+  expect(prompt).toMatch(/Gateway URL: https?:\/\//);
+  expect(prompt).toMatch(/Deployed gateway|Local development/);
+  expect(prompt).toContain('POST /v1/agent/sync');
+  expect(prompt).toContain('working-log');
   expect(prompt).toContain('OPENX_AGENT_KEY');
   expect(prompt).toContain('Never send raw prompts');
   expect(prompt).not.toContain('oxag_');

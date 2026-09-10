@@ -10,11 +10,13 @@ from gateway_client import (
     get_agent_status,
     register_agent,
     submit_telemetry,
+    submit_working_log,
     submit_usage_event,
     sync_agent,
     submit_memory_episode,
     submit_candidate_skill,
     request_gated_feed,
+    sync_settlement,
 )
 
 
@@ -72,6 +74,17 @@ class TestGatewayClient(unittest.TestCase):
             self.assertTrue(res["ok"])
             self.assertEqual(res["id"], "tel_12345")
             mock_urlopen.assert_called_once()
+
+    def test_submit_working_log_is_agent_authenticated_and_ordered(self):
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": true, "accepted": true}'
+            result = submit_working_log("agent-1", "task-1", "550e8400-e29b-41d4-a716-446655440000", 2, "collecting", "phase", "Collected safe sources.", 25, "2026-09-04T00:00:00.000Z")
+        self.assertTrue(result["ok"])
+        request = mock_urlopen.call_args.args[0]
+        self.assertIn("/v1/agents/agent-1/tasks/task-1/working-log", request.full_url)
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["sequence"], 2)
+        self.assertEqual(payload["kind"], "phase")
 
     def test_usage_and_sync_use_agent_key(self):
         with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen") as mock_urlopen:
@@ -165,6 +178,26 @@ class TestGatewayClient(unittest.TestCase):
         self.assertNotIn("cost_usdc", payload)
         self.assertEqual(payload["model_usage"], [])
         self.assertEqual(payload["nim_savings"], [])
+
+    def test_sync_settlement_success(self):
+        with patch.dict("os.environ", {"OPENX_AGENT_KEY": "test-key"}), patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": true, "settlement": {"transaction_hash": "abc", "status": "settled"}}'
+            result = sync_settlement(
+                agent_id="test-agent",
+                transaction_hash="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                quote_id="quote-123",
+                amount="0.05",
+                merchant_address="rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+                facilitator_node="hypermove-relay-01",
+            )
+
+        self.assertTrue(result["ok"])
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(req.headers["X-agent-key"], "test-key")
+        payload = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(payload["merchant_address"], "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV")
+        self.assertEqual(payload["facilitator_node"], "hypermove-relay-01")
+        self.assertEqual(payload["amount"], "0.05")
 
 
 if __name__ == "__main__":

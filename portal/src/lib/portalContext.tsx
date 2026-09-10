@@ -30,6 +30,8 @@ import {
   fetchFleetOverview,
   registerAgent as registerGatewayAgent,
   claimAgent as claimGatewayAgent,
+  rotateAgentKey as rotateGatewayAgentKey,
+  revokeAgent as revokeGatewayAgent,
   RegisterAgentInput,
   RegisteredAgentProjection,
   linkDreamAgent,
@@ -70,6 +72,8 @@ interface PortalContextType {
   sendTestTelemetry: (agentId?: string) => Promise<void>;
   registerAgent: (input: RegisterAgentInput) => Promise<{ ok: boolean; agentId?: string; agentKey?: string; error?: string }>;
   claimAgent: (agentId: string, agentKey: string) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
+  rotateAgentKey: (agentId: string, currentAgentKey?: string) => Promise<{ ok: boolean; agentKey?: string; rotatedAt?: string; error?: string }>;
+  revokeAgent: (agentId: string, agentKey?: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const GATEWAY_URL =
@@ -355,6 +359,28 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     return { ok: true, agentId: result.agent.agent_id };
   };
 
+  const rotateAgentKey = async (agentId: string, currentAgentKey?: string) => {
+    const result = await rotateGatewayAgentKey(agentId, currentAgentKey);
+    if (!result.ok || !result.agent) {
+      showToast(result.error || 'Unable to rotate agent key', 'error');
+      return { ok: false, error: result.error };
+    }
+    setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
+    showToast('Agent key rotated successfully. Store your new key immediately.', 'success');
+    return { ok: true, agentKey: result.agentKey, rotatedAt: result.rotatedAt };
+  };
+
+  const revokeAgent = async (agentId: string, agentKey?: string) => {
+    const result = await revokeGatewayAgent(agentId, agentKey);
+    if (!result.ok || !result.agent) {
+      showToast(result.error || 'Unable to revoke agent', 'error');
+      return { ok: false, error: result.error };
+    }
+    setAgents((previous) => [...previous.filter((agent) => agent.id !== result.agent!.agent_id), projectGatewayAgent(result.agent!)]);
+    showToast('Agent identity revoked.', 'info');
+    return { ok: true };
+  };
+
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setNotification({ message, type });
     setTimeout(() => {
@@ -507,6 +533,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         sendTestTelemetry,
         registerAgent,
         claimAgent,
+        rotateAgentKey,
+        revokeAgent,
       }}
     >
       {children}

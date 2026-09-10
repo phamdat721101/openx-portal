@@ -3,7 +3,7 @@ import { Indexer, MemData } from '@0gfoundation/0g-storage-ts-sdk';
 import { ethers } from 'ethers';
 import { gatewayDatabase } from '../db/database.js';
 
-export type KnowledgeSource = 'agent_profile' | 'telemetry' | 'memory_episode' | 'skill_metadata' | 'usage_summary' | 'dream_run' | 'lesson' | 'audit';
+export type KnowledgeSource = 'agent_profile' | 'telemetry' | 'memory_episode' | 'skill_metadata' | 'usage_summary' | 'dream_run' | 'lesson' | 'audit' | 'position_statement';
 export type ArchiveState = 'pending' | 'uploading' | 'uploaded' | 'retrying' | 'failed';
 export type SyncState = 'queued' | 'collecting' | 'uploading' | 'complete' | 'degraded';
 

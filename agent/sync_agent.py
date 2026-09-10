@@ -29,6 +29,28 @@ def main() -> int:
         return 1
     synchronized_at = result.get("synchronized_at", "unknown time")
     print(f"Synchronized agent at {synchronized_at}")
+
+    # Optionally sync on-chain settlement proof if provided in environment
+    settlement_tx = os.environ.get("OPENX_SETTLEMENT_TX_HASH", "").strip()
+    if settlement_tx:
+        from gateway_client import sync_settlement
+        quote_id = os.environ.get("OPENX_SETTLEMENT_QUOTE_ID", f"quote-{agent_id[:8]}").strip()
+        amount = os.environ.get("OPENX_SETTLEMENT_AMOUNT", "0.05").strip()
+        merchant = os.environ.get("OPENX_SETTLEMENT_MERCHANT", "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV").strip()
+        facilitator = os.environ.get("OPENX_SETTLEMENT_FACILITATOR", "openx-relay-01").strip()
+        settle_res = sync_settlement(
+            agent_id=agent_id,
+            transaction_hash=settlement_tx,
+            quote_id=quote_id,
+            amount=amount,
+            merchant_address=merchant,
+            facilitator_node=facilitator,
+        )
+        if settle_res.get("ok"):
+            print(f"Synchronized on-chain settlement {settlement_tx[:12]}… to facilitator {facilitator}")
+        else:
+            print(f"Settlement sync note: {settle_res.get('message', 'not recorded')}")
+
     return 0
 
 

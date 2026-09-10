@@ -124,6 +124,7 @@ export interface RegisteredAgentProjection {
   state: 'registered' | 'online' | 'offline' | 'auto_discovered' | 'revoked';
   registered_at: string;
   last_seen_at: string | null;
+  credential_last_rotated_at?: string | null;
 }
 
 export interface RegisterAgentInput {
@@ -139,6 +140,8 @@ export interface RegisterAgentInput {
 export interface ClaimAgentInput { agent_id: string; agent_key: string; }
 
 export interface WalletSnapshot { address: string | null; chain_id: number; network: string; native_balance_wei: string | null; tokens: Array<{ address: string; symbol: string; decimals: number; balance: string }>; activity: Array<{ hash: string; timestamp: string | null; from: string; to: string | null; value: string }>; fetched_at: string; source_errors: string[]; }
+export interface StoredTaskRun { task_id: string; title: string | null; category: string | null; model: string; state: string; input_tokens: number; latency_ms: number; deliverable_markdown: string | null; deliverable_sha256: string | null; created_at: string; completed_at: string | null; }
+export interface WorkingLogEntry { event_id: string; sequence: number; phase: string; progress_pct: number | null; kind: 'started' | 'phase' | 'decision' | 'artifact' | 'error' | 'completed' | 'failed'; markdown: string; created_at: string; }
 export interface AuditRun { id: string; created_at: string; trigger: string; findings: Array<{ id: string; dimension: string; verdict: string; title: string; evidence: string[] }> }
 export interface DreamAuditJob { id: string; dream_run_id: string; status: 'queued' | 'reviewing' | 'completed' | 'retrying' | 'not_configured'; attempts: number; next_attempt_at: string | null; error?: string; review?: { model: string; lesson_reviews: Array<{ lesson_id: string; verdict: 'keep' | 'revise' | 'reject'; rationale: string; evidence: string[] }>; skill_candidate?: { skill_slug: string; display_name: string; capability_ids: string[]; rationale: string } }; }
 export interface AuditEvent { id: string; audit_job_id: string; agent_id: string; phase: 'queued' | 'gathering_evidence' | 'requesting_review' | 'validating' | 'persisting' | 'completed' | 'retrying' | 'failed' | 'not_configured'; message: string; created_at: string; }
@@ -173,6 +176,8 @@ export interface DreamReadinessResponse { ok: boolean; ready?: boolean; has_toke
 export interface ZeroGProvenance { status: 'pending' | 'uploading' | 'uploaded' | 'retrying' | 'failed' | 'disabled'; root_hash?: string; tx_hash?: string; explorer_url?: string; uploaded_at?: string; proof_available: boolean; message?: string; }
 export interface DreamLesson { id: string; openx_agent_id: string; state: 'UNREVIEWED' | 'IN_REVIEW' | 'PROMOTED_CONSTRAINT' | 'QUARANTINED' | 'REJECTED'; content: string; source: 'manual' | 'dream_cycle'; created_at: string; resolved_at?: string; zerog_provenance?: ZeroGProvenance; }
 export interface DreamLessonProof { verified: boolean; provenance: ZeroGProvenance; canonical_payload: unknown; }
+export interface StatementReport { id: string; agent_id: string; report_id: string; content_hash: string; visibility: 'private' | 'public'; source_chain: string; source_block: string; source_timestamp: string; finality: 'finalized' | 'pending'; wallet_address?: string; venue: string; collateral_usd: number; debt_usd: number; realized_pnl_usd?: number; unrealized_pnl_usd?: number; pnl_methodology: string; ltv: number; recommended_ltv: number; max_ltv: number; status: 'received' | 'partial' | 'failed'; attestation: { status: 'pending' | 'verified' | 'unavailable_source_chain' | 'failed'; chain?: string; receipt?: string }; summary?: string; updated_at: string; }
+export interface StatementExecution { id: string; status: 'prepared' | 'submitted' | 'verified' | 'anchor_pending' | 'anchored' | 'failed'; attestation_status: 'pending_anchor' | 'pending_creditcoin_attestation' | 'verified' | 'unavailable' | 'failed'; receipt_hash?: string; arbitrum_tx_hash?: string; ethereum_anchor_tx_hash?: string; reason?: string; }
 
 const GATEWAY_URL =
   process.env.NEXT_PUBLIC_OPENX_GATEWAY_URL || 'http://localhost:7411';
@@ -210,6 +215,14 @@ export async function checkGatewayHealth(): Promise<boolean> {
     return false;
   }
 }
+export async function fetchLatestStatement(agentId: string): Promise<StatementReport | null> {
+  try { const response = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/statements/latest`, { signal: AbortSignal.timeout(10_000) }); const body = await response.json(); return response.ok ? body.report as StatementReport : null; } catch { return null; }
+}
+export async function fetchStatementLeaderboard(): Promise<StatementReport[]> {
+  try { const response = await fetch(`${GATEWAY_URL}/v1/statements/leaderboard`, { signal: AbortSignal.timeout(10_000) }); const body = await response.json(); return response.ok ? body.reports as StatementReport[] : []; } catch { return []; }
+}
+export async function prepareStatementExecution(agentId: string, reportId: string, walletAddress: string): Promise<{ execution: StatementExecution; transaction: { chainId: number; to: string; data: string; value: string } } | null> { try { const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/statements/${encodeURIComponent(reportId)}/executions/prepare`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet_address: walletAddress }) }); return res.ok ? await res.json() : null; } catch { return null; } }
+export async function submitStatementExecution(agentId: string, executionId: string, transactionHash: string): Promise<StatementExecution | null> { try { const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/statements/executions/${encodeURIComponent(executionId)}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transaction_hash: transactionHash }) }); const body = await res.json(); return res.ok ? body.execution as StatementExecution : null; } catch { return null; } }
 
 export async function fetchLiveAgentStatus(
   agentId: string,
@@ -259,6 +272,9 @@ export async function fetchRecentTelemetry(agentId?: string): Promise<IngestedTr
     return [];
   }
 }
+
+export async function fetchStoredTasks(agentId: string): Promise<StoredTaskRun[]> { try { const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/tasks`, { signal: AbortSignal.timeout(5000) }); return res.ok ? ((await res.json()).tasks || []) : []; } catch { return []; } }
+export async function fetchStoredTask(agentId: string, taskId: string): Promise<{ task: StoredTaskRun; working_log: WorkingLogEntry[] } | null> { try { const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}`, { signal: AbortSignal.timeout(5000), cache: 'no-store' }); return res.ok ? await res.json() : null; } catch { return null; } }
 
 export async function fetchUsageSummaries(): Promise<UsageSummary[]> {
   try {
@@ -374,6 +390,123 @@ export async function claimAgent(input: ClaimAgentInput): Promise<{ ok: boolean;
     const data = await res.json();
     return { ok: Boolean(data.ok), agent: data.agent, knowledgeSync: data.knowledge_sync, error: data.error || data.message };
   } catch (error: any) { return { ok: false, error: error.message || 'Gateway unavailable' }; }
+}
+
+export interface RotateKeyResult {
+  ok: boolean;
+  agent?: RegisteredAgentProjection;
+  agentKey?: string;
+  rotatedAt?: string;
+  message?: string;
+  error?: string;
+}
+
+export async function rotateAgentKey(agentId: string, currentAgentKey?: string): Promise<RotateKeyResult> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    if (currentAgentKey) headers['x-agent-key'] = currentAgentKey;
+    const res = await fetch(`${GATEWAY_URL}/v1/agent/rotate-key`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ agent_id: agentId, ...(currentAgentKey ? { current_agent_key: currentAgentKey } : {}) }),
+    });
+    const data = await res.json();
+    return {
+      ok: Boolean(data.ok),
+      agent: data.agent,
+      agentKey: data.credential?.agent_key,
+      rotatedAt: data.credential?.rotated_at,
+      message: data.message,
+      error: data.message || data.error,
+    };
+  } catch (error: any) {
+    return { ok: false, error: error.message || 'Gateway unavailable' };
+  }
+}
+
+export async function revokeAgent(agentId: string, agentKey?: string): Promise<{ ok: boolean; agent?: RegisteredAgentProjection; error?: string }> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    if (agentKey) headers['x-agent-key'] = agentKey;
+    const res = await fetch(`${GATEWAY_URL}/v1/agent/revoke`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ agent_id: agentId, ...(agentKey ? { agent_key: agentKey } : {}) }),
+    });
+    const data = await res.json();
+    return { ok: Boolean(data.ok), agent: data.agent, error: data.message || data.error };
+  } catch (error: any) {
+    return { ok: false, error: error.message || 'Gateway unavailable' };
+  }
+}
+
+export interface AgentSettlementTransaction {
+  quote_id: string;
+  transaction_hash?: string;
+  amount?: string;
+  currency: string;
+  destination?: string;
+  merchant_address?: string;
+  facilitator_node?: string;
+  status: 'settled' | 'pending' | 'failed';
+  settled_at?: string;
+  openx_agent_id: string;
+  run_id?: string;
+  source?: 'gateway_auto' | 'agent_sync';
+  error_reason?: string;
+}
+
+export async function fetchSettlementHistory(agentId?: string): Promise<{
+  ok: boolean;
+  network?: string;
+  currency?: string;
+  count?: number;
+  settlements?: AgentSettlementTransaction[];
+  error?: string;
+}> {
+  try {
+    const url = new URL(`${GATEWAY_URL}/v1/settlement/history`);
+    if (agentId) {
+      url.searchParams.set('agent_id', agentId);
+      url.searchParams.set('agentId', agentId);
+    }
+    const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+    const data = await res.json();
+    return { ok: Boolean(data.ok), network: data.network, currency: data.currency, count: data.count, settlements: data.settlements, error: data.error };
+  } catch (error: any) {
+    return { ok: false, error: error.message || 'Gateway unavailable' };
+  }
+}
+
+export async function submitAgentSettlement(
+  agentId: string,
+  agentKey: string,
+  payload: {
+    transaction_hash: string;
+    quote_id: string;
+    amount: string;
+    currency?: string;
+    merchant_address: string;
+    facilitator_node: string;
+    status?: 'settled' | 'pending' | 'failed';
+    run_id?: string;
+    settled_at?: string;
+    error_reason?: string;
+  }
+): Promise<{ ok: boolean; settlement?: AgentSettlementTransaction; error?: string; message?: string }> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/v1/agents/${encodeURIComponent(agentId)}/settlements`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-agent-key': agentKey,
+      },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (error: any) {
+    return { ok: false, error: 'settlement_sync_failed', message: error.message || 'Gateway unreachable' };
+  }
 }
 
 export async function submitTelemetryEvent(payload: {

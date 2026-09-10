@@ -225,7 +225,7 @@ export class UsageLedger {
   }
 
   private planFor(planId?: string): PlanRate { return this.catalog.plans[planId || 'starter'] || this.catalog.plans.starter; }
-  private assertAvailable(): void { if (this.production && (!this.path || !this.catalogPath)) throw new Error('usage_ledger_not_configured'); }
+  private assertAvailable(): void { if (this.production && !this.path) throw new Error('usage_ledger_not_configured'); }
   private loadCatalog(): UsageBillingCatalog {
     if (!this.catalogPath) return DEFAULT_CATALOG;
     if (!existsSync(this.catalogPath)) { if (this.production) return DEFAULT_CATALOG; return DEFAULT_CATALOG; }

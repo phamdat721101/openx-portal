@@ -14,6 +14,7 @@ export interface StudioAgent {
   connection_state?: 'registered' | 'online' | 'offline' | 'auto_discovered' | 'revoked';
   registration_source?: 'explicit' | 'auto_discovered';
   last_seen_at?: string | null;
+  credential_last_rotated_at?: string | null;
   owner_verified?: boolean;
   is_demo?: boolean;
 }

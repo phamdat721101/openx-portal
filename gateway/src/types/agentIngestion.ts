@@ -16,6 +16,7 @@ export interface AgentTelemetryPayload {
   current_phase?: string;
   progress_pct?: number;
   summary?: string;
+  deliverable_markdown?: string;
   timestamp?: string;
 }
 

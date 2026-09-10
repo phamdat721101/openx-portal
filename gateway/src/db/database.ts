@@ -25,6 +25,20 @@ export class GatewayDatabase {
       CREATE TABLE IF NOT EXISTS audit_findings (id TEXT PRIMARY KEY, audit_run_id TEXT NOT NULL, agent_id TEXT NOT NULL, dimension TEXT NOT NULL, verdict TEXT NOT NULL, title TEXT NOT NULL, evidence TEXT NOT NULL, rule_version TEXT NOT NULL, created_at TEXT NOT NULL);
       INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (1, datetime('now'));
     `);
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS xrpl_task_runs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT, category TEXT, model TEXT NOT NULL, state TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, deliverable_markdown TEXT, deliverable_sha256 TEXT, created_at TEXT NOT NULL, completed_at TEXT);
+      CREATE UNIQUE INDEX IF NOT EXISTS xrpl_task_runs_agent_task ON xrpl_task_runs(agent_id, task_id);
+      CREATE TABLE IF NOT EXISTS xrpl_task_artifacts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, filename TEXT NOT NULL, media_type TEXT NOT NULL, bytes INTEGER NOT NULL, storage_uri TEXT, sha256 TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS xrpl_task_log_entries (event_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, task_id TEXT NOT NULL, sequence INTEGER NOT NULL, phase TEXT NOT NULL, progress_pct REAL, kind TEXT NOT NULL, markdown TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(agent_id, task_id, sequence));
+      CREATE INDEX IF NOT EXISTS xrpl_task_log_entries_task ON xrpl_task_log_entries(agent_id, task_id, sequence);
+      CREATE TABLE IF NOT EXISTS xrpl_wallet_profiles (agent_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL UNIQUE, address TEXT, network TEXT NOT NULL, daily_limit_rlusd TEXT NOT NULL, per_tx_limit_rlusd TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS xrpl_wallet_operations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, amount_rlusd TEXT, transaction_hash TEXT, detail TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS xrpl_ledger_snapshots (id TEXT PRIMARY KEY, ledger_index INTEGER NOT NULL, ledger_hash TEXT, payload TEXT NOT NULL, source_errors TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS xrpl_routing_policies (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, rules TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(agent_id, version));
+      CREATE TABLE IF NOT EXISTS xrpl_routing_policy_acks (policy_id TEXT NOT NULL, agent_id TEXT NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY(policy_id, agent_id));
+      INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (10, datetime('now'));
+      INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (11, datetime('now'));
+    `);
   }
 
   public read<T>(key: string, fallback: T): T {

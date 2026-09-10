@@ -71,4 +71,40 @@ describe('Agent registration to portal fleet E2E', () => {
     const records = await request(app).get('/v1/agents');
     expect(records.body.agents.filter((agent: { agent_id: string }) => agent.agent_id === agentId)).toHaveLength(1);
   });
+
+  it('rotates agent key via POST /v1/agent/rotate-key and revokes via POST /v1/agent/revoke', async () => {
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Rotatable Agent', host_type: 'custom' });
+    const agentId = registration.body.agent.agent_id as string;
+    const initialKey = registration.body.credential.agent_key as string;
+
+    // Reject rotation with invalid current key
+    const badRotate = await request(app).post('/v1/agent/rotate-key').send({ agent_id: agentId, current_agent_key: 'invalid-current-key-long-enough' });
+    expect(badRotate.status).toBe(401);
+
+    // Rotate with valid key in body
+    const rotate = await request(app).post('/v1/agent/rotate-key').send({ agent_id: agentId, current_agent_key: initialKey });
+    expect(rotate.status).toBe(200);
+    expect(rotate.body.ok).toBe(true);
+    expect(rotate.body.credential.agent_key).toMatch(/^oxag_/);
+    expect(rotate.body.credential.agent_key).not.toBe(initialKey);
+
+    const newKey = rotate.body.credential.agent_key as string;
+
+    // Telemetry with new key succeeds
+    const telemetry = await request(app).post('/v1/agent/telemetry').set('x-agent-key', newKey).send({
+      agent_id: agentId,
+      task_id: 'task-after-rotation',
+      status: 'success',
+    });
+    expect(telemetry.status).toBe(201);
+
+    // Revocation disables agent
+    const revoke = await request(app).post('/v1/agent/revoke').send({ agent_id: agentId, agent_key: newKey });
+    expect(revoke.status).toBe(200);
+    expect(revoke.body.agent.state).toBe('revoked');
+
+    // Future rotation on revoked agent is rejected
+    const rotateRevoked = await request(app).post('/v1/agent/rotate-key').send({ agent_id: agentId, current_agent_key: newKey });
+    expect(rotateRevoked.status).toBe(403);
+  });
 });

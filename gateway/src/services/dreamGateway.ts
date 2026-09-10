@@ -6,16 +6,32 @@ import { gatewayDatabase } from '../db/database.js';
 export type DreamRunStatus = 'payment_required' | 'running' | 'completed' | 'failed';
 
 export interface DreamLink { openx_agent_id: string; hypermove_agent_id: string; linked_at: string; }
-export interface DreamSettlement { status: 'settled' | 'failed'; quote_id: string; transaction_hash?: string; amount: string; currency: 'RLUSD'; destination: string; attempted_at: string; reason?: string; }
+export interface DreamSettlement { status: 'settled' | 'failed' | 'pending'; quote_id: string; transaction_hash?: string; amount: string; currency: string; destination: string; merchant_address?: string; facilitator_node?: string; attempted_at: string; reason?: string; source?: 'gateway_auto' | 'agent_sync'; }
 export interface LearningBrief { generated_at: string; stage_summaries?: Record<string, unknown>; morning_brief?: string; constraints_count: number; }
 export interface DreamReconciliation { last_checked_at: string; upstream_status?: string; last_error?: string; }
 export interface DreamRun { id: string; openx_agent_id: string; hypermove_agent_id: string; status: DreamRunStatus; preset: 'frugal' | 'balanced' | 'thorough'; budget_usd: number; created_at: string; completed_at?: string; result?: unknown; error?: string; quote?: unknown; settlement?: DreamSettlement; learning_brief?: LearningBrief; reconciliation?: DreamReconciliation; source?: 'gateway' | 'hypermove_sync'; upstream_fingerprint?: string; }
 export interface ManagedLesson { id: string; openx_agent_id: string; run_id?: string; state: 'UNREVIEWED' | 'IN_REVIEW' | 'PROMOTED_CONSTRAINT' | 'QUARANTINED' | 'REJECTED'; content: string; source: 'manual' | 'dream_cycle'; created_at: string; resolved_at?: string; }
 
+export interface SyncedSettlementRecord {
+  quote_id: string;
+  transaction_hash: string;
+  amount: string;
+  currency: string;
+  destination: string;
+  merchant_address: string;
+  facilitator_node: string;
+  status: 'settled' | 'pending' | 'failed';
+  settled_at: string;
+  openx_agent_id: string;
+  run_id?: string;
+  source: 'agent_sync';
+  error_reason?: string;
+}
+
 interface EncryptedSecret { iv: string; tag: string; ciphertext: string; }
 export interface CachedWakeContext { upstream: unknown; cached_at: string; }
-interface DreamState { links: DreamLink[]; runs: DreamRun[]; lessons: ManagedLesson[]; credentials: Record<string, EncryptedSecret>; settled_quotes: string[]; settled_transactions: string[]; wake_contexts?: Record<string, CachedWakeContext>; }
-const emptyState = (): DreamState => ({ links: [], runs: [], lessons: [], credentials: {}, settled_quotes: [], settled_transactions: [], wake_contexts: {} });
+interface DreamState { links: DreamLink[]; runs: DreamRun[]; lessons: ManagedLesson[]; credentials: Record<string, EncryptedSecret>; settled_quotes: string[]; settled_transactions: string[]; wake_contexts?: Record<string, CachedWakeContext>; synced_settlements?: SyncedSettlementRecord[]; }
+const emptyState = (): DreamState => ({ links: [], runs: [], lessons: [], credentials: {}, settled_quotes: [], settled_transactions: [], wake_contexts: {}, synced_settlements: [] });
 
 export class DreamStateStore {
   private state: DreamState;
@@ -75,6 +91,111 @@ export class DreamStateStore {
   cacheWakeContext(openxAgentId: string, upstream: unknown): CachedWakeContext { const cached = { upstream, cached_at: new Date().toISOString() }; this.state.wake_contexts = { ...(this.state.wake_contexts || {}), [openxAgentId]: cached }; this.persist(); return cached; }
   getCachedWakeContext(openxAgentId: string): CachedWakeContext | undefined { return this.state.wake_contexts?.[openxAgentId]; }
   claimSettlement(quoteId: string, transactionHash: string): boolean { if (this.state.settled_quotes.includes(quoteId) || this.state.settled_transactions.includes(transactionHash)) return false; this.state.settled_quotes.push(quoteId); this.state.settled_transactions.push(transactionHash); this.persist(); return true; }
+  recordSettlement(settlement: {
+    quote_id: string;
+    transaction_hash: string;
+    amount: string;
+    currency?: string;
+    merchant_address: string;
+    facilitator_node: string;
+    status?: 'settled' | 'pending' | 'failed';
+    openx_agent_id: string;
+    run_id?: string;
+    settled_at?: string;
+    error_reason?: string;
+  }): SyncedSettlementRecord {
+    if (!this.state.synced_settlements) this.state.synced_settlements = [];
+    const record: SyncedSettlementRecord = {
+      quote_id: settlement.quote_id,
+      transaction_hash: settlement.transaction_hash,
+      amount: settlement.amount,
+      currency: settlement.currency || 'RLUSD',
+      destination: settlement.merchant_address,
+      merchant_address: settlement.merchant_address,
+      facilitator_node: settlement.facilitator_node,
+      status: settlement.status || 'settled',
+      openx_agent_id: settlement.openx_agent_id,
+      ...(settlement.run_id ? { run_id: settlement.run_id } : {}),
+      settled_at: settlement.settled_at || new Date().toISOString(),
+      source: 'agent_sync',
+      ...(settlement.error_reason ? { error_reason: settlement.error_reason } : {}),
+    };
+    this.state.synced_settlements = [
+      record,
+      ...this.state.synced_settlements.filter(
+        (s) => s.transaction_hash !== record.transaction_hash && s.quote_id !== record.quote_id
+      ),
+    ];
+    if (record.status === 'settled') {
+      if (!this.state.settled_quotes.includes(record.quote_id)) this.state.settled_quotes.push(record.quote_id);
+      if (!this.state.settled_transactions.includes(record.transaction_hash)) this.state.settled_transactions.push(record.transaction_hash);
+    }
+    this.persist();
+    return record;
+  }
+  removeSettlement(txHashOrQuoteId: string): boolean {
+    if (!this.state.synced_settlements) return false;
+    const initialLen = this.state.synced_settlements.length;
+    this.state.synced_settlements = this.state.synced_settlements.filter(
+      (s) => s.transaction_hash !== txHashOrQuoteId && s.quote_id !== txHashOrQuoteId
+    );
+    this.state.settled_quotes = (this.state.settled_quotes || []).filter((q) => q !== txHashOrQuoteId);
+    this.state.settled_transactions = (this.state.settled_transactions || []).filter((t) => t !== txHashOrQuoteId);
+    const removed = this.state.synced_settlements.length < initialLen;
+    if (removed) {
+      this.persist();
+    }
+    return removed;
+  }
+  listSettlements(openxAgentId?: string) {
+    const list: Array<{
+      quote_id: string;
+      transaction_hash?: string;
+      amount?: string;
+      currency: string;
+      destination?: string;
+      merchant_address?: string;
+      facilitator_node?: string;
+      status: 'settled' | 'pending' | 'failed';
+      settled_at?: string;
+      openx_agent_id: string;
+      run_id?: string;
+      source: 'gateway_auto' | 'agent_sync';
+      error_reason?: string;
+    }> = [];
+
+    for (const run of this.state.runs) {
+      if ((!openxAgentId || run.openx_agent_id === openxAgentId) && run.settlement) {
+        list.push({
+          quote_id: run.settlement.quote_id,
+          transaction_hash: run.settlement.transaction_hash,
+          amount: run.settlement.amount,
+          currency: run.settlement.currency || 'RLUSD',
+          destination: run.settlement.destination,
+          merchant_address: run.settlement.merchant_address || run.settlement.destination,
+          facilitator_node: run.settlement.facilitator_node || (process.env.OPENX_FACILITATOR_NODE || 'hypermove-gateway-relay'),
+          status: run.settlement.status,
+          settled_at: run.completed_at || run.created_at,
+          openx_agent_id: run.openx_agent_id,
+          run_id: run.id,
+          source: 'gateway_auto',
+          error_reason: run.settlement.reason,
+        });
+      }
+    }
+
+    if (this.state.synced_settlements) {
+      for (const synced of this.state.synced_settlements) {
+        if (!openxAgentId || synced.openx_agent_id === openxAgentId) {
+          if (!list.some((item) => item.transaction_hash === synced.transaction_hash)) {
+            list.push(synced);
+          }
+        }
+      }
+    }
+
+    return list.sort((a, b) => Date.parse(b.settled_at || '1970-01-01') - Date.parse(a.settled_at || '1970-01-01'));
+  }
   resolveLesson(openxAgentId: string, lessonId: string, state: ManagedLesson['state']) { const lesson = this.state.lessons.find((item) => item.openx_agent_id === openxAgentId && item.id === lessonId); if (!lesson) return undefined; lesson.state = state; lesson.resolved_at = new Date().toISOString(); this.persist(); return lesson; }
   setMcpToken(agentId: string, token: string): void { this.state.credentials[agentId] = this.encrypt(token); this.persist(); }
   hasMcpToken(agentId: string): boolean { return Boolean(this.state.credentials[agentId]); }

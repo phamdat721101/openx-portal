@@ -165,6 +165,50 @@ export class AgentRegistry {
     return this.project(agent);
   }
 
+  /** Rotates the credential for an existing agent, invalidating the previous one. */
+  public rotateCredential(agentId: string, currentCredential?: string): { agent: AgentProjection; credential: string } {
+    this.assertAvailable();
+    const agent = this.records.get(agentId);
+    if (!agent) {
+      throw new AgentRegistryError('agent_not_found', 404);
+    }
+    if (agent.state === 'revoked') {
+      throw new AgentRegistryError('agent_revoked', 403);
+    }
+
+    const production = this.mode === 'production' || process.env.OPENX_AGENT_REGISTRATION_MODE === 'production';
+    if (agent.credential_hash && (production || currentCredential)) {
+      if (!currentCredential || !verifyCredential(currentCredential, agent.credential_hash)) {
+        throw new AgentRegistryError('invalid_agent_key', 401);
+      }
+    }
+
+    const credential = `oxag_${randomBytes(24).toString('base64url')}`;
+    agent.credential_hash = hashCredential(credential);
+    agent.credential_last_rotated_at = new Date().toISOString();
+    this.persist();
+    return { agent: this.project(agent), credential };
+  }
+
+  /** Revokes an agent identity, disabling future authentication. */
+  public revoke(agentId: string, credential?: string): AgentProjection {
+    this.assertAvailable();
+    const agent = this.records.get(agentId);
+    if (!agent) {
+      throw new AgentRegistryError('agent_not_found', 404);
+    }
+    const production = this.mode === 'production' || process.env.OPENX_AGENT_REGISTRATION_MODE === 'production';
+    if (agent.credential_hash && (production || credential)) {
+      if (!credential || !verifyCredential(credential, agent.credential_hash)) {
+        throw new AgentRegistryError('invalid_agent_key', 401);
+      }
+    }
+    agent.state = 'revoked';
+    agent.credential_hash = null;
+    this.persist();
+    return this.project(agent);
+  }
+
   public recordHeartbeat(agentId: string, metadata: { model?: string; capabilities?: string[] }): AgentProjection {
     this.assertAvailable();
     let agent = this.records.get(agentId);

@@ -7,6 +7,7 @@ export interface NPaymentReceipt {
   transaction_hash: string;
   validated: boolean;
 }
+export interface NPaymentTrustLineReceipt { transaction_hash: string; validated: boolean; }
 
 type RpcResponse = {
   result?: { content?: Array<{ text?: string }>; isError?: boolean };
@@ -39,18 +40,29 @@ export class NPaymentXrplWallet {
       && Boolean(this.signerSeed());
   }
 
-  public async payRlusd(destination: string, amount: string, nonce: string): Promise<NPaymentReceipt> {
+  public async payRlusd(destination: string, amount: string, nonce: string, profileId?: string): Promise<NPaymentReceipt> {
     if (!this.isConfigured()) throw new Error('n_payment_xrpl_wallet_not_configured');
     const binary = process.env.OPENX_NPAYMENT_BIN!.trim();
     const response = await this.call(binary, 'tools/call', {
       name: 'xrpl_pay',
-      arguments: { destination, amount, chain: 'xrpl-testnet', memo: nonce },
+      arguments: { destination, amount, chain: 'xrpl-testnet', memo: nonce, ...(profileId ? { profile_id: profileId } : {}) },
     });
     if (response.error || response.result?.isError) throw new Error(response.error?.message || 'n_payment_xrpl_payment_failed');
     const text = response.result?.content?.[0]?.text;
     const payload = text ? JSON.parse(text) as { ok?: boolean; data?: { hash?: string; validated?: boolean } } : undefined;
     const hash = payload?.data?.hash;
     if (!payload?.ok || !hash || !/^[A-Fa-f0-9]{64}$/.test(hash)) throw new Error('n_payment_invalid_payment_receipt');
+    return { transaction_hash: hash, validated: payload.data?.validated === true };
+  }
+
+  public async ensureRlusdTrustLine(profileId: string, issuer: string, limit: string): Promise<NPaymentTrustLineReceipt> {
+    if (!this.isConfigured()) throw new Error('n_payment_xrpl_wallet_not_configured');
+    const response = await this.call(process.env.OPENX_NPAYMENT_BIN!.trim(), 'tools/call', { name: 'xrpl_trust_set', arguments: { profile_id: profileId, issuer, currency: process.env.OPENX_RLUSD_CURRENCY || 'RLUSD', limit, flags: 0x00020000, chain: 'xrpl-testnet' } });
+    if (response.error || response.result?.isError) throw new Error(response.error?.message || 'n_payment_xrpl_trust_set_failed');
+    const text = response.result?.content?.[0]?.text;
+    const payload = text ? JSON.parse(text) as { ok?: boolean; data?: { hash?: string; validated?: boolean } } : undefined;
+    const hash = payload?.data?.hash;
+    if (!payload?.ok || !hash || !/^[A-Fa-f0-9]{64}$/.test(hash)) throw new Error('n_payment_invalid_trust_set_receipt');
     return { transaction_hash: hash, validated: payload.data?.validated === true };
   }
 

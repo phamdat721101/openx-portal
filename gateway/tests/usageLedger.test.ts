@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { app } from '../src/server.js';
-import { usageLedger } from '../src/services/usageLedger.js';
+import { UsageLedger, usageLedger } from '../src/services/usageLedger.js';
 import { agentRegistry } from '../src/services/agentRegistry.js';
 
 describe('usage ledger API', () => {
   afterEach(() => { usageLedger.clear(); agentRegistry.clear(); });
+
+  it('uses the built-in billing catalog when a production ledger path is configured without a catalog file', () => {
+    const ledger = new UsageLedger({ path: '/tmp/openx-usage-ledger-test.json', production: true });
+    expect(() => ledger.summary('usage-agent')).not.toThrow();
+  });
 
   it('prices detailed usage, tracks nim savings, and ignores an idempotent duplicate', async () => {
     const payload = {
