@@ -30,7 +30,7 @@ import { xrplNativeService } from './services/xrplNativeService.js';
 import { walletService } from './services/walletService.js';
 import { auditorService } from './services/auditorService.js';
 import { agentKnowledgeArchive, KnowledgeInput } from './services/agentKnowledgeArchive.js';
-import { statementTracking } from './services/statementTracking.js';
+import { statementHash, statementTracking } from './services/statementTracking.js';
 import { statementExecution } from './services/statementExecution.js';
 import { gatewayDatabase } from './db/database.js';
 import { SkillLifecycleStatus } from './types/agentIngestion.js';
@@ -203,9 +203,17 @@ const WalletProfileSchema = z.object({ profile_id: z.string().trim().min(1).max(
 const TrustLineSchema = z.object({ limit: z.string().regex(/^\d+(\.\d+)?$/).default('1000000') }).strict();
 const RoutingPolicySchema = z.object({ rules: z.array(z.object({ category: z.string().trim().min(1).max(80), model: z.string().trim().min(1).max(160), minimum_samples: z.number().int().min(20).default(20) }).strict()).min(1).max(30) }).strict();
 const WorkingLogSchema = z.object({ event_id: z.string().uuid(), sequence: z.number().int().nonnegative(), phase: z.string().trim().min(1).max(120), progress_pct: z.number().min(0).max(100).optional(), kind: z.enum(['started', 'phase', 'decision', 'artifact', 'error', 'completed', 'failed']), markdown: z.string().trim().min(1).max(64_000).refine((value) => !/<[^>]*>/i.test(value), 'raw_html_not_allowed'), created_at: z.string().datetime() }).strict();
-const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_hash: z.string().regex(/^[a-f0-9]{64}$/i), visibility: z.enum(['private', 'public']), source_chain: z.string().trim().min(1).max(80), source_block: z.string().trim().min(1).max(80), source_timestamp: z.string().datetime(), finality: z.enum(['finalized', 'pending']), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(), venue: z.string().trim().min(1).max(120), collateral_usd: z.number().nonnegative().max(1e12), debt_usd: z.number().nonnegative().max(1e12), realized_pnl_usd: z.number().finite().optional(), unrealized_pnl_usd: z.number().finite().optional(), pnl_methodology: z.string().trim().min(1).max(500), status: z.enum(['received', 'partial', 'failed']).optional(), summary: z.string().trim().max(2000).optional(), attestation: z.object({ status: z.enum(['pending', 'verified', 'unavailable_source_chain', 'failed']), chain: z.string().trim().max(80).optional(), receipt: z.string().trim().max(1000).optional() }).strict().optional() }).strict().refine((value) => value.collateral_usd === 0 ? value.debt_usd === 0 : value.debt_usd / value.collateral_usd <= .4, 'LTV exceeds configured 40% maximum');
+const JsonRecord = z.record(z.unknown());
+const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_hash: z.string().regex(/^[a-f0-9]{64}$/i), visibility: z.enum(['private', 'public']), source_chain: z.string().trim().min(1).max(80), source_block: z.string().trim().min(1).max(80), source_timestamp: z.string().datetime(), finality: z.enum(['finalized', 'pending']), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(), venue: z.string().trim().min(1).max(120), collateral_usd: z.number().nonnegative().max(1e12), debt_usd: z.number().nonnegative().max(1e12), realized_pnl_usd: z.number().finite().optional(), unrealized_pnl_usd: z.number().finite().optional(), pnl_methodology: z.string().trim().min(1).max(500), status: z.enum(['received', 'partial', 'failed']).optional(), summary: z.string().trim().max(2000).optional(), attestation: z.object({ status: z.enum(['pending', 'verified', 'unavailable_source_chain', 'failed']), chain: z.string().trim().max(80).optional(), receipt: z.string().trim().max(1000).optional() }).strict().optional(), schema_version: z.literal('apsd-l/2.1').optional(), canonical_envelope: JsonRecord.optional(), the_graph_telemetry: JsonRecord.optional(), oneinch_telemetry: JsonRecord.optional(), pnl_attribution: JsonRecord.optional(), risk_engine_audit: JsonRecord.optional(), actionable_allocation_vector: JsonRecord.optional(), decision_context_card: z.string().trim().max(1000).optional() }).strict().superRefine((value, ctx) => {
+  if (value.collateral_usd !== 0 && value.debt_usd / value.collateral_usd > .4) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'LTV exceeds configured 40% maximum' });
+  const v2 = value.schema_version === 'apsd-l/2.1';
+  if (v2 && !value.canonical_envelope) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'canonical_envelope_required_for_v2' });
+  if (v2 && value.canonical_envelope && statementHash(value.canonical_envelope) !== value.content_hash.toLowerCase()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'statement_content_hash_mismatch' });
+});
 const StatementExecutionPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/) }).strict();
 const StatementExecutionSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
+const StatementRebalancePrepareSchema = z.object({ report_id: z.string().uuid(), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), target_ltv: z.number().min(.2).max(.32).default(.28), mode: z.literal('fusion').default('fusion') }).strict();
+const StatementRebalanceSubmitSchema = z.object({ order_id: z.string().trim().min(1).max(200), signed_order: JsonRecord }).strict();
 
 type DreamPaymentQuote = { quote_id: string; amount: string; currency: string; destination: string; issuer: string; nonce: string; expires_at?: string };
 const paymentQuoteFrom = (value: unknown): DreamPaymentQuote | undefined => {
@@ -809,6 +817,30 @@ app.get('/v1/agents/:agentId/statements/latest', (req: Request, res: Response): 
   res.json({ ok: true, report });
 });
 app.get('/v1/statements/leaderboard', (req: Request, res: Response): void => { res.json({ ok: true, reports: statementTracking.leaderboard(Number(req.query.limit) || 25) }); });
+
+/** Config-gated provider pass-through: the Gateway never invents or signs Fusion typed data. */
+app.post('/v1/agents/:agentId/statements/rebalance/prepare', async (req: Request, res: Response): Promise<void> => {
+  const parsed = StatementRebalancePrepareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_rebalance_request' }); return; }
+  const report = statementTracking.latest(req.params.agentId);
+  if (!report || report.report_id !== parsed.data.report_id) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
+  const endpoint = process.env.OPENX_ONEINCH_FUSION_PREPARE_URL; const key = process.env.OPENX_ONEINCH_API_KEY;
+  if (process.env.OPENX_ONEINCH_ENABLED !== 'true' || !endpoint || !key) { res.status(409).json({ ok: false, error: 'oneinch_fusion_not_configured' }); return; }
+  const repaymentUsd = (report.debt_usd - parsed.data.target_ltv * report.collateral_usd) / (1 - parsed.data.target_ltv);
+  if (!Number.isFinite(repaymentUsd) || repaymentUsd <= 0 || report.ltv <= parsed.data.target_ltv) { res.status(409).json({ ok: false, error: 'rebalance_not_required' }); return; }
+  try {
+    const upstream = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ chainId: 42161, walletAddress: parsed.data.wallet_address, targetLtv: parsed.data.target_ltv, repaymentUsd, reportHash: report.content_hash }), signal: AbortSignal.timeout(15_000) });
+    const body = await upstream.json().catch(() => null) as { order_id?: string; typed_data?: Record<string, unknown>; expires_at?: string } | null;
+    if (!upstream.ok || !body?.order_id || !body.typed_data) { res.status(502).json({ ok: false, error: 'oneinch_fusion_prepare_failed' }); return; }
+    res.json({ ok: true, order_id: body.order_id, target_ltv: parsed.data.target_ltv, expected_debt_repaid_usd: repaymentUsd, typed_data: body.typed_data, expires_at: body.expires_at });
+  } catch { res.status(502).json({ ok: false, error: 'oneinch_fusion_unavailable' }); }
+});
+app.post('/v1/agents/:agentId/statements/rebalance/submit', async (req: Request, res: Response): Promise<void> => {
+  const parsed = StatementRebalanceSubmitSchema.safeParse(req.body); const endpoint = process.env.OPENX_ONEINCH_FUSION_SUBMIT_URL; const key = process.env.OPENX_ONEINCH_API_KEY;
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_rebalance_submission' }); return; }
+  if (process.env.OPENX_ONEINCH_ENABLED !== 'true' || !endpoint || !key) { res.status(409).json({ ok: false, error: 'oneinch_fusion_not_configured' }); return; }
+  try { const upstream = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(parsed.data), signal: AbortSignal.timeout(15_000) }); const body = await upstream.json().catch(() => null); if (!upstream.ok) { res.status(502).json({ ok: false, error: 'oneinch_fusion_submit_failed' }); return; } res.json({ ok: true, order: body }); } catch { res.status(502).json({ ok: false, error: 'oneinch_fusion_unavailable' }); }
+});
 
 /** Browser-wallet commitment flow. The Gateway verifies every receipt before it records it. */
 app.post('/v1/agents/:agentId/statements/:reportId/executions/prepare', (req: Request, res: Response): void => {

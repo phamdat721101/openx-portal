@@ -12,7 +12,9 @@ export type AttestationStatus = 'pending_anchor' | 'pending_creditcoin_attestati
 export interface StatementExecution {
   id: string; agent_id: string; report_id: string; report_hash: string; wallet_address: string;
   action_id: string; status: ExecutionStatus; arbitrum_tx_hash?: string; arbitrum_block?: string;
-  receipt_hash?: string; ethereum_anchor_tx_hash?: string; attestation_status: AttestationStatus;
+  receipt_hash?: string; ethereum_anchor_tx_hash?: string; ethereum_anchor_block?: string;
+  creditcoin_chain_id?: string; creditcoin_block?: string; creditcoin_verified_at?: string; creditcoin_explorer_url?: string;
+  attestation_status: AttestationStatus;
   reason?: string; created_at: string; updated_at: string;
 }
 
@@ -30,10 +32,15 @@ class StatementExecutionService {
     gatewayDatabase.raw().exec(`CREATE TABLE IF NOT EXISTS statement_executions (
       id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, report_id TEXT NOT NULL, report_hash TEXT NOT NULL,
       wallet_address TEXT NOT NULL, action_id TEXT NOT NULL, status TEXT NOT NULL, arbitrum_tx_hash TEXT,
-      arbitrum_block TEXT, receipt_hash TEXT, ethereum_anchor_tx_hash TEXT, attestation_status TEXT NOT NULL,
+      arbitrum_block TEXT, receipt_hash TEXT, ethereum_anchor_tx_hash TEXT, ethereum_anchor_block TEXT,
+      creditcoin_chain_id TEXT, creditcoin_block TEXT, creditcoin_verified_at TEXT, attestation_status TEXT NOT NULL,
       reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       UNIQUE(agent_id, report_id, action_id));
       CREATE INDEX IF NOT EXISTS statement_executions_agent_updated ON statement_executions(agent_id, updated_at DESC);`);
+    const columns = new Set((gatewayDatabase.raw().prepare('PRAGMA table_info(statement_executions)').all() as { name: string }[]).map((column) => column.name));
+    for (const [name, definition] of Object.entries({ ethereum_anchor_block: 'TEXT', creditcoin_chain_id: 'TEXT', creditcoin_block: 'TEXT', creditcoin_verified_at: 'TEXT' })) {
+      if (!columns.has(name)) gatewayDatabase.raw().exec(`ALTER TABLE statement_executions ADD COLUMN ${name} ${definition}`);
+    }
   }
 
   public isConfigured(): boolean { return configured(); }
@@ -47,6 +54,11 @@ class StatementExecutionService {
       ...(value.arbitrum_block ? { arbitrum_block: String(value.arbitrum_block) } : {}),
       ...(value.receipt_hash ? { receipt_hash: String(value.receipt_hash) } : {}),
       ...(value.ethereum_anchor_tx_hash ? { ethereum_anchor_tx_hash: String(value.ethereum_anchor_tx_hash) } : {}),
+      ...(value.ethereum_anchor_block ? { ethereum_anchor_block: String(value.ethereum_anchor_block) } : {}),
+      ...(value.creditcoin_chain_id ? { creditcoin_chain_id: String(value.creditcoin_chain_id) } : {}),
+      ...(value.creditcoin_block ? { creditcoin_block: String(value.creditcoin_block) } : {}),
+      ...(value.creditcoin_verified_at ? { creditcoin_verified_at: String(value.creditcoin_verified_at) } : {}),
+      ...(process.env.OPENX_CREDITCOIN_CC3_EXPLORER_URL ? { creditcoin_explorer_url: process.env.OPENX_CREDITCOIN_CC3_EXPLORER_URL.replace(/\/$/, '') } : {}),
       attestation_status: value.attestation_status as AttestationStatus,
       ...(value.reason ? { reason: String(value.reason) } : {}), created_at: String(value.created_at), updated_at: String(value.updated_at),
     };
@@ -93,7 +105,7 @@ class StatementExecutionService {
     return this.get(id)!;
   }
   private update(id: string, values: Omit<Partial<StatementExecution>, 'reason'> & { reason?: string | null }): void {
-    const allowed = ['status', 'arbitrum_tx_hash', 'arbitrum_block', 'receipt_hash', 'ethereum_anchor_tx_hash', 'attestation_status', 'reason'] as const;
+    const allowed = ['status', 'arbitrum_tx_hash', 'arbitrum_block', 'receipt_hash', 'ethereum_anchor_tx_hash', 'ethereum_anchor_block', 'creditcoin_chain_id', 'creditcoin_block', 'creditcoin_verified_at', 'attestation_status', 'reason'] as const;
     const entries = allowed.filter((key) => key in values).map((key) => [key, values[key]] as const);
     if (!entries.length) return;
     gatewayDatabase.raw().prepare(`UPDATE statement_executions SET ${entries.map(([key]) => `${key}=?`).join(', ')}, updated_at=? WHERE id=?`).run(...entries.map(([, value]) => value ?? null), timestamp(), id);
@@ -106,7 +118,7 @@ class StatementExecutionService {
       const tx = await signer.sendTransaction({ to: anchor, data: anchorInterface.encodeFunctionData('anchor', [execution.receipt_hash]) });
       const receipt = await tx.wait();
       if (!receipt || receipt.status !== 1) throw new Error('receipt_anchor_not_confirmed');
-      this.update(id, { status: 'anchored', ethereum_anchor_tx_hash: tx.hash, attestation_status: process.env.OPENX_ATTESTCOIN_ENABLED === 'true' ? 'pending_creditcoin_attestation' : 'unavailable' });
+      this.update(id, { status: 'anchored', ethereum_anchor_tx_hash: tx.hash, ethereum_anchor_block: String(receipt.blockNumber), attestation_status: process.env.OPENX_ATTESTCOIN_ENABLED === 'true' ? 'pending_creditcoin_attestation' : 'unavailable' });
       if (process.env.OPENX_ATTESTCOIN_ENABLED === 'true') await this.verifyCreditcoin(id);
     } catch (error) { this.update(id, { status: 'anchor_pending', attestation_status: 'failed', reason: error instanceof Error ? error.message : 'receipt_anchor_failed' }); }
   }
@@ -130,7 +142,10 @@ class StatementExecutionService {
       const proof = await builder.getProof(execution.ethereum_anchor_tx_hash);
       if (!proof.success || !proof.data) return;
       const verified = await new blockProver.PrecompileBlockProver(creditcoin as never).verifySingle(proof.data.chainKey, proof.data.headerNumber, proof.data.txBytes, proof.data.merkleProof, proof.data.continuityProof);
-      if (verified) this.update(id, { attestation_status: 'verified', reason: null });
+      if (verified) {
+        const network = await creditcoin.getNetwork();
+        this.update(id, { attestation_status: 'verified', creditcoin_chain_id: String(network.chainId), creditcoin_block: String(proof.data.headerNumber), creditcoin_verified_at: timestamp(), reason: null });
+      }
     } catch (error) {
       // Attestation is asynchronous. Preserve pending state for a safe later retry unless configuration is invalid.
       const message = error instanceof Error ? error.message : 'creditcoin_proof_pending';

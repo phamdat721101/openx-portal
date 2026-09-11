@@ -12,12 +12,14 @@ type PortalAuth = {
   logout: () => void;
   getAccessToken: () => Promise<string | null>;
   sendArbitrumTransaction: (transaction: { to: string; data: string; value?: string }) => Promise<string | null>;
+  signTypedData: (chainId: number, typedData: Record<string, unknown>) => Promise<string | null>;
 };
 
 const unavailableAuth: PortalAuth = {
   enabled: false, ready: true, authenticated: false, walletAddress: null,
   login: () => undefined, logout: () => undefined, getAccessToken: async () => null,
   sendArbitrumTransaction: async () => null,
+  signTypedData: async () => null,
 };
 
 const PortalAuthContext = createContext<PortalAuth>(unavailableAuth);
@@ -34,7 +36,14 @@ function PrivyPortalAuthProvider({ children }: { children: React.ReactNode }) {
     await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x66eee' }] });
     return await provider.request({ method: 'eth_sendTransaction', params: [{ from: walletAddress, to: transaction.to, data: transaction.data, value: transaction.value || '0x0' }] }) as string;
   };
-  return <PortalAuthContext.Provider value={{ enabled: true, ready, authenticated, walletAddress, login, logout, getAccessToken, sendArbitrumTransaction }}>{children}</PortalAuthContext.Provider>;
+  const signTypedData = async (chainId: number, typedData: Record<string, unknown>): Promise<string | null> => {
+    const connected = wallets.find((item) => item.address.toLowerCase() === walletAddress?.toLowerCase());
+    if (!connected || !walletAddress) return null;
+    const provider = await connected.getEthereumProvider();
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${chainId.toString(16)}` }] });
+    return await provider.request({ method: 'eth_signTypedData_v4', params: [walletAddress, JSON.stringify(typedData)] }) as string;
+  };
+  return <PortalAuthContext.Provider value={{ enabled: true, ready, authenticated, walletAddress, login, logout, getAccessToken, sendArbitrumTransaction, signTypedData }}>{children}</PortalAuthContext.Provider>;
 }
 
 export function PortalAuthProvider({ enabled, children }: { enabled: boolean; children: React.ReactNode }) {

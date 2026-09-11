@@ -53,6 +53,12 @@ def run_demo() -> int:
         print(f"[openx-deep-research-analyst] Missing required configuration: {', '.join(missing)}")
         return 2
 
+    # If DeFi research mode is requested, execute full DeFi lending research workflow
+    if "--defi-research" in sys.argv or os.environ.get("OPENX_MODE") == "defi_research":
+        from defi_lending_researcher import run_defi_lending_research
+        res = run_defi_lending_research(agent_id=agent_id)
+        return 0 if res.get("ok") else 1
+
     print("[openx-deep-research-analyst] Running pre-flight operational check")
     status = get_agent_status(agent_id)
     if status.get("ok"):
@@ -65,8 +71,8 @@ def run_demo() -> int:
     sync_result = sync_agent(
         agent_id,
         model=model,
-        tools=["google-workspace-cli.sheets.read"],
-        skills=["nim-skill"],
+        tools=["google-workspace-cli.sheets.read", "defi_lending_analyzer"],
+        skills=["nim-skill", "statement-tracking-researcher", "defi-lending-researcher"],
         plan_id=plan_id,
     )
     if not sync_result.get("ok"):
