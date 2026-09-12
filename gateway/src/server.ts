@@ -32,6 +32,7 @@ import { auditorService } from './services/auditorService.js';
 import { agentKnowledgeArchive, KnowledgeInput } from './services/agentKnowledgeArchive.js';
 import { statementHash, statementTracking } from './services/statementTracking.js';
 import { statementExecution } from './services/statementExecution.js';
+import { allocationExecution } from './services/allocationExecution.js';
 import { gatewayDatabase } from './db/database.js';
 import { SkillLifecycleStatus } from './types/agentIngestion.js';
 
@@ -212,6 +213,8 @@ const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_h
 });
 const StatementExecutionPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/) }).strict();
 const StatementExecutionSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
+const AllocationPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), source_amount: z.string().regex(/^\d+$/), slippage_bps: z.number().int().min(1).max(500).default(50) }).strict();
+const AllocationSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
 const StatementRebalancePrepareSchema = z.object({ report_id: z.string().uuid(), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), target_ltv: z.number().min(.2).max(.32).default(.28), mode: z.literal('fusion').default('fusion') }).strict();
 const StatementRebalanceSubmitSchema = z.object({ order_id: z.string().trim().min(1).max(200), signed_order: JsonRecord }).strict();
 
@@ -859,6 +862,27 @@ app.post('/v1/agents/:agentId/statements/executions/:executionId/submit', async 
   if (!execution || execution.agent_id !== req.params.agentId) { res.status(404).json({ ok: false, error: 'statement_execution_not_found' }); return; }
   try { res.json({ ok: true, execution: await statementExecution.verifyAndAnchor(execution.id, parsed.data.transaction_hash) }); }
   catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'statement_execution_verification_failed' }); }
+});
+/** Allocation is distinct from the zero-value statement-commitment proof flow. */
+app.post('/v1/agents/:agentId/statements/:reportId/allocations/prepare', async (req: Request, res: Response): Promise<void> => {
+  const parsed = AllocationPrepareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_allocation_request' }); return; }
+  const report = statementTracking.latest(req.params.agentId);
+  if (!report || report.report_id !== req.params.reportId) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
+  if (report.finality !== 'finalized' || report.status === 'failed' || report.ltv > .4) { res.status(409).json({ ok: false, error: 'allocation_risk_gate_rejected' }); return; }
+  try { res.status(201).json({ ok: true, ...(await allocationExecution.prepare(req.params.agentId, report.report_id, report.content_hash, parsed.data.wallet_address, parsed.data.source_amount, parsed.data.slippage_bps)) }); }
+  catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'allocation_prepare_failed' }); }
+});
+app.post('/v1/agents/:agentId/statements/allocations/:executionId/submit', async (req: Request, res: Response): Promise<void> => {
+  const parsed = AllocationSubmitSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_allocation_submission' }); return; }
+  const execution = allocationExecution.get(req.params.executionId);
+  if (!execution || execution.agent_id !== req.params.agentId) { res.status(404).json({ ok: false, error: 'allocation_execution_not_found' }); return; }
+  try { res.json({ ok: true, execution: await allocationExecution.submit(execution.id, parsed.data.transaction_hash) }); }
+  catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'allocation_submission_failed' }); }
+});
+app.get('/v1/agents/:agentId/statements/:reportId/allocations/latest', (req: Request, res: Response): void => {
+  res.json({ ok: true, configured: allocationExecution.isConfigured(), execution: allocationExecution.latest(req.params.agentId, req.params.reportId) || null });
 });
 app.post('/v1/agents/:agentId/statements/executions/:executionId/retry-attestation', async (req: Request, res: Response): Promise<void> => {
   const execution = statementExecution.get(req.params.executionId);

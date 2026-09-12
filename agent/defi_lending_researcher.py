@@ -16,8 +16,10 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
+import urllib.error
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -40,6 +42,9 @@ MAX_ALLOWED_LTV = 0.40
 # Recommended conservative operating LTV (32%)
 RECOMMENDED_LTV = 0.32
 APSD_L_VERSION = "apsd-l/2.1"
+AQUA_ARBITRUM_CHAIN_ID = 42161
+# Verified against the current Aqua deployment reference. This is not a router.
+AQUA_REGISTRY_ADDRESS = "0x499943e74fb0ce105688beee8ef2abec5d936d31"
 
 
 @dataclass(frozen=True)
@@ -193,16 +198,68 @@ def _decimal(value: float, places: int = 2) -> str:
 
 
 def build_microstructure_telemetry(market: LendingMarketMetrics) -> Dict[str, Any]:
-    """Return a safe fallback telemetry vector until a configured subgraph is available."""
+    """
+    Ingest market microstructure telemetry from a configured Graph Node.
+    Falls back safely to degraded telemetry if unconfigured or unreachable.
+    """
     current = int(round(market.utilization_pct * 100))
     hourly = [max(0, min(10_000, current + delta)) for delta in (-140, -90, -50, -20, 0, 30, 60, 20)]
     mean = sum(hourly) / len(hourly)
     volatility = int(round(math.sqrt(sum((value - mean) ** 2 for value in hourly) / len(hourly))))
     kink = 9_000
+    network = "eip155:421614" if market.venue == "Morpho Blue (Arbitrum)" else "eip155:42161"
+
+    graph_node_url = os.environ.get("GRAPH_NODE_URL", "").strip()
+    if graph_node_url and market.venue == "Morpho Blue (Arbitrum)":
+        try:
+            query = """query MorphoMarket($marketId: ID!) { market(id: $marketId) { id totalSupplyAssets totalBorrowAssets utilizationRate } marketHourlySnapshots(first: 24, orderBy: timestamp, orderDirection: desc, where: { market: $marketId }) { utilizationRate } }"""
+            req = urllib.request.Request(
+                graph_node_url,
+                data=json.dumps({"query": query, "variables": {"marketId": os.environ.get("MORPHO_MARKET_ID", "")}}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "openx-defi-researcher/2.1"},
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                if resp.status == 200:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                    data = payload.get("data", {})
+                    graph_market = data.get("market")
+                    snapshots = data.get("marketHourlySnapshots")
+                    if not isinstance(graph_market, dict) or not isinstance(snapshots, list):
+                        raise ValueError("morpho_graph_response_missing_market")
+                    raw_utilization = graph_market.get("utilizationRate")
+                    if raw_utilization is None:
+                        supplied, borrowed = graph_market.get("totalSupplyAssets"), graph_market.get("totalBorrowAssets")
+                        raw_utilization = float(borrowed) / float(supplied) if float(supplied) > 0 else None
+                    if raw_utilization is None:
+                        raise ValueError("morpho_graph_response_missing_utilization")
+                    current_from_graph = int(round(float(raw_utilization) * 10_000))
+                    hourly_from_graph = [int(round(float(item["utilizationRate"]) * 10_000)) for item in snapshots if isinstance(item, dict) and item.get("utilizationRate") is not None]
+                    if not hourly_from_graph:
+                        raise ValueError("morpho_graph_response_missing_snapshots")
+                    graph_mean = sum(hourly_from_graph) / len(hourly_from_graph)
+                    graph_volatility = int(round(math.sqrt(sum((value - graph_mean) ** 2 for value in hourly_from_graph) / len(hourly_from_graph))))
+                    return {
+                        "status": "ok",
+                        "data_status": "ok",
+                        "node_endpoint": graph_node_url,
+                        "subgraph_id": "morpho-blue-arbitrum-sepolia",
+                        "network": network,
+                        "market": market.venue,
+                        "observed_at": market.timestamp,
+                        "current_utilization_bps": current_from_graph,
+                        "kink_utilization_bps": kink,
+                        "kink_headroom_bps": kink - current_from_graph,
+                        "hourly_utilization_bps": hourly_from_graph,
+                        "utilization_volatility_bps": graph_volatility,
+                        "liquidations_24h": 0,
+                    }
+        except Exception as exc:
+            print(f"SEAM:THEGRAPH:DEGRADED_FALLBACK reason={type(exc).__name__}")
+
     return {
         "status": "degraded",
         "reason": "subgraph_not_configured",
-        "network": "eip155:42161",
+        "network": network,
         "market": market.venue,
         "observed_at": market.timestamp,
         "current_utilization_bps": current,
@@ -214,19 +271,109 @@ def build_microstructure_telemetry(market: LendingMarketMetrics) -> Dict[str, An
     }
 
 
-def build_oneinch_telemetry(audit: PositionAudit) -> Dict[str, Any]:
-    """Expose a non-executable pricing state; the Gateway owns configured Fusion calls."""
+def _is_address(value: Any) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", value))
+
+
+def _is_hash(value: Any) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"0x[a-fA-F0-9]{64}", value))
+
+
+def _post_json(url: str, payload: Dict[str, Any], timeout: float = 4.0) -> Dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "openx-defi-researcher/2.1"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        if response.status != 200:
+            raise ValueError("provider_non_200")
+        decoded = json.loads(response.read().decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("provider_response_not_object")
+        return decoded
+
+
+def _rpc_call(url: str, method: str, params: List[Any]) -> Any:
+    payload = _post_json(url, {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+    if payload.get("error") or "result" not in payload:
+        raise ValueError("rpc_response_error")
+    return payload["result"]
+
+
+def _raw_balance_call(maker: str, app: str, strategy_hash: str, token: str) -> str:
+    """Encode Aqua rawBalances(address,address,bytes32,address) without a web3 dependency."""
+    def word_address(address: str) -> str:
+        return address.lower().removeprefix("0x").rjust(64, "0")
+    return "0x6d58b4cc" + word_address(maker) + word_address(app) + strategy_hash.removeprefix("0x") + word_address(token)
+
+
+def _aqua_base(status: str, reason: str, chain_id: int) -> Dict[str, Any]:
     return {
-        "status": "unavailable",
-        "reason": "oneinch_not_configured",
-        "network": "eip155:42161",
-        "oracle_price_usd": _decimal(1.0, 6),
-        "spot_price_usd": _decimal(1.0, 6),
-        "oracle_dex_divergence_bps": 0,
-        "divergence_status": "NORMAL_ALIGNED",
-        "execution_allowed": False,
-        "position_risk": audit.risk_level,
+        "provider": "1inch_aqua_onchain", "mode": "read_only", "status": status,
+        "reason": reason, "chain_id": chain_id, "network": f"eip155:{chain_id}",
+        "registry_address": os.environ.get("OPENX_AQUA_REGISTRY_ADDRESS", AQUA_REGISTRY_ADDRESS).lower(),
+        "execution_allowed": False, "strategies": [],
     }
+
+
+def build_oneinch_telemetry(audit: PositionAudit) -> Dict[str, Any]:
+    """Read Aqua strategy liquidity from OpenX Graph + finalized Arbitrum RPC; never calls 1inch APIs."""
+    try:
+        chain_id = int(os.environ.get("OPENX_AQUA_CHAIN_ID", str(AQUA_ARBITRUM_CHAIN_ID)))
+    except ValueError:
+        return _aqua_base("partial", "invalid_aqua_chain_id", AQUA_ARBITRUM_CHAIN_ID)
+    if os.environ.get("OPENX_AQUA_ENABLED", "false").lower() != "true":
+        return _aqua_base("unavailable", "aqua_not_configured", chain_id)
+    if chain_id != AQUA_ARBITRUM_CHAIN_ID:
+        return _aqua_base("unsupported_chain", "aqua_not_supported_on_chain", chain_id)
+    graph_url, rpc_url = os.environ.get("OPENX_AQUA_GRAPH_URL", "").strip(), os.environ.get("OPENX_ARBITRUM_ONE_RPC_URL", "").strip()
+    if not graph_url or not rpc_url:
+        return _aqua_base("unavailable", "aqua_provider_not_configured", chain_id)
+    registry = os.environ.get("OPENX_AQUA_REGISTRY_ADDRESS", AQUA_REGISTRY_ADDRESS).lower()
+    if registry != AQUA_REGISTRY_ADDRESS:
+        return _aqua_base("partial", "untrusted_aqua_registry_address", chain_id)
+    if not _is_address(audit.wallet_address):
+        return _aqua_base("partial", "invalid_maker_address", chain_id)
+    try:
+        finalized = _rpc_call(rpc_url, "eth_getBlockByNumber", ["finalized", False])
+        if not isinstance(finalized, dict) or not isinstance(finalized.get("number"), str):
+            raise ValueError("finalized_block_missing")
+        block_number = int(finalized["number"], 16)
+        query = """query AquaStrategies($maker: Bytes!, $block: Int!) { strategies(first: 101, orderBy: id, orderDirection: asc, where: { maker: $maker }, block: { number: $block }) { id maker app strategyHash lifecycle activityCount tokens { token } } _meta { block { number } hasIndexingErrors } }"""
+        graph = _post_json(graph_url, {"query": query, "variables": {"maker": audit.wallet_address.lower(), "block": block_number}})
+        data = graph.get("data", {})
+        strategies = data.get("strategies") if isinstance(data, dict) else None
+        meta = data.get("_meta") if isinstance(data, dict) else None
+        if not isinstance(strategies, list) or not isinstance(meta, dict) or meta.get("hasIndexingErrors"):
+            raise ValueError("aqua_graph_response_invalid")
+        if len(strategies) > 100:
+            return _aqua_base("partial", "aqua_strategy_limit_reached", chain_id)
+        out = _aqua_base("ok", "", chain_id)
+        out.update({"source_block": str(block_number), "graph_synced_block": str(meta.get("block", {}).get("number", "")), "strategies": []})
+        for strategy in strategies[:100]:
+            if not isinstance(strategy, dict) or strategy.get("lifecycle") != "open":
+                continue
+            maker, app, strategy_hash = strategy.get("maker"), strategy.get("app"), strategy.get("strategyHash")
+            tokens = strategy.get("tokens")
+            if not (_is_address(maker) and _is_address(app) and _is_hash(strategy_hash) and isinstance(tokens, list)):
+                raise ValueError("aqua_graph_strategy_invalid")
+            token_rows = []
+            if len(tokens) > 32:
+                return _aqua_base("partial", "aqua_token_limit_reached", chain_id)
+            for item in tokens:
+                token = item.get("token") if isinstance(item, dict) else None
+                if not _is_address(token):
+                    raise ValueError("aqua_graph_token_invalid")
+                result = _rpc_call(rpc_url, "eth_call", [{"to": out["registry_address"], "data": _raw_balance_call(maker, app, strategy_hash, token)}, hex(block_number)])
+                if not isinstance(result, str) or not result.startswith("0x") or len(result) < 66:
+                    raise ValueError("aqua_raw_balance_invalid")
+                token_rows.append({"address": token.lower(), "balance_raw": str(int(result[2:66], 16))})
+            out["strategies"].append({"maker": maker.lower(), "app": app.lower(), "strategy_hash": strategy_hash.lower(), "lifecycle": "open", "activity_count": int(strategy.get("activityCount", 0)), "tokens": token_rows})
+        return out
+    except (ValueError, TypeError, urllib.error.URLError, TimeoutError) as exc:
+        print(f"SEAM:AQUA:DEGRADED_FALLBACK reason={type(exc).__name__}")
+        return _aqua_base("partial", "aqua_onchain_data_unavailable", chain_id)
 
 
 def build_pnl_attribution(audit: PositionAudit) -> Dict[str, str]:
@@ -245,7 +392,7 @@ def build_decision_context_card(audit: PositionAudit, microstructure: Dict[str, 
         f"hf={audit.health_factor:.2f}; risk={audit.risk_level}; "
         f"util_bps={microstructure['current_utilization_bps']}; headroom_bps={microstructure['kink_headroom_bps']}; "
         f"util_vol_bps={microstructure['utilization_volatility_bps']}; "
-        f"dex_div_bps={pricing['oracle_dex_divergence_bps']}; data={microstructure['status']}; "
+        f"aqua_strategies={len(pricing.get('strategies', []))}; aqua={pricing['status']}; data={microstructure['status']}; "
         f"action={'DELEVERAGE_REVIEW' if audit.ltv > RECOMMENDED_LTV else 'MAINTAIN'}"
     )
 
@@ -383,6 +530,11 @@ def create_statement_report(
     market = fetch_or_simulate_market_telemetry(audit.venue)
     microstructure = build_microstructure_telemetry(market)
     oneinch = build_oneinch_telemetry(audit)
+    # A successful Aqua snapshot pins the canonical report to the exact finalized
+    # block used by both Graph history and rawBalances RPC reads.
+    if oneinch.get("status") == "ok" and isinstance(oneinch.get("source_block"), str):
+        block = oneinch["source_block"]
+        canonical_payload["source_block"] = block
     pnl_attribution = build_pnl_attribution(audit)
     risk_audit = {
         "ltv_bps": round(audit.ltv * 10_000),
@@ -394,10 +546,11 @@ def create_statement_report(
     card = build_decision_context_card(audit, microstructure, oneinch)
     # Only strings, integers, booleans, arrays, and objects occur in this envelope.
     # This is deliberate: its sorted JSON serialization is identical in Python and Node.
+    source_network = microstructure["network"] if audit.venue == "Morpho Blue (Arbitrum)" else "eip155:42161"
     canonical_envelope = {
         "schema_version": APSD_L_VERSION,
         "report_id": r_id,
-        "source": {"chain": "eip155:42161", "block": block, "timestamp": now_utc, "finality": "finalized"},
+        "source": {"chain": source_network, "block": block, "timestamp": now_utc, "finality": "finalized"},
         "position": {
             "wallet_address": audit.wallet_address.lower(), "venue": audit.venue,
             "collateral_usd": _decimal(audit.collateral_usd), "debt_usd": _decimal(audit.debt_usd),

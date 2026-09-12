@@ -7,7 +7,7 @@ import { statementHash } from '../src/services/statementTracking.js';
 
 const report = { report_id: '11111111-1111-4111-8111-111111111111', content_hash: 'a'.repeat(64), visibility: 'public', source_chain: 'arbitrum-sepolia', source_block: '123', source_timestamp: '2026-09-09T00:00:00.000Z', finality: 'finalized', wallet_address: '0x1111111111111111111111111111111111111111', venue: 'Morpho', collateral_usd: 1000, debt_usd: 300, realized_pnl_usd: 42, pnl_methodology: 'realized swaps', attestation: { status: 'pending' } };
 describe('statement report ingestion', () => {
-  beforeEach(() => { agentRegistry.clear(); gatewayDatabase.raw().exec('DELETE FROM statement_executions; DELETE FROM statement_reports; DELETE FROM agent_knowledge_records;'); });
+  beforeEach(() => { agentRegistry.clear(); gatewayDatabase.raw().exec('DELETE FROM allocation_executions; DELETE FROM statement_executions; DELETE FROM statement_reports; DELETE FROM agent_knowledge_records;'); });
   it('migrates execution evidence fields for an existing Gateway database', () => {
     const columns = new Set((gatewayDatabase.raw().prepare('PRAGMA table_info(statement_executions)').all() as { name: string }[]).map((column) => column.name));
     expect(['ethereum_anchor_block', 'creditcoin_chain_id', 'creditcoin_block', 'creditcoin_verified_at'].every((column) => columns.has(column))).toBe(true);
@@ -54,5 +54,11 @@ describe('statement report ingestion', () => {
     await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(report);
     const response = await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements/rebalance/prepare`).send({ report_id: report.report_id, wallet_address: '0x1111111111111111111111111111111111111111' });
     expect(response.status).toBe(409); expect(response.body.error).toBe('oneinch_fusion_not_configured');
+  });
+  it('keeps asset allocation unavailable until every fixed-market provider binding is configured', async () => {
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
+    await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(report);
+    const response = await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements/${report.report_id}/allocations/prepare`).send({ wallet_address: report.wallet_address, source_amount: '1000000', slippage_bps: 50 });
+    expect(response.status).toBe(409); expect(response.body.error).toBe('allocation_execution_not_configured');
   });
 });

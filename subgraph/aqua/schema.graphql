@@ -1,0 +1,31 @@
+type Strategy @entity(immutable: false) {
+  id: ID!
+  maker: Bytes!
+  app: Bytes!
+  strategyHash: Bytes!
+  lifecycle: String!
+  activityCount: Int!
+  openedAtBlock: BigInt!
+  openedAtTimestamp: BigInt!
+  closedAtBlock: BigInt
+  tokens: [StrategyToken!]! @derivedFrom(field: "strategy")
+}
+
+type StrategyToken @entity(immutable: false) {
+  id: ID!
+  strategy: Strategy!
+  token: Bytes!
+  lastActivityBlock: BigInt!
+}
+
+type StrategyActivity @entity(immutable: true) {
+  id: ID!
+  strategy: Strategy!
+  kind: String!
+  token: Bytes
+  amount: BigInt
+  transactionHash: Bytes!
+  logIndex: BigInt!
+  blockNumber: BigInt!
+  timestamp: BigInt!
+}

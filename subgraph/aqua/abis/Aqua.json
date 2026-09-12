@@ -1,0 +1,6 @@
+[
+  {"anonymous":false,"inputs":[{"indexed":false,"name":"maker","type":"address"},{"indexed":false,"name":"app","type":"address"},{"indexed":false,"name":"strategyHash","type":"bytes32"},{"indexed":false,"name":"strategy","type":"bytes"}],"name":"Shipped","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"name":"maker","type":"address"},{"indexed":false,"name":"app","type":"address"},{"indexed":false,"name":"strategyHash","type":"bytes32"}],"name":"Docked","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"name":"maker","type":"address"},{"indexed":false,"name":"app","type":"address"},{"indexed":false,"name":"strategyHash","type":"bytes32"},{"indexed":false,"name":"token","type":"address"},{"indexed":false,"name":"amount","type":"uint256"}],"name":"Pushed","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"name":"maker","type":"address"},{"indexed":false,"name":"app","type":"address"},{"indexed":false,"name":"strategyHash","type":"bytes32"},{"indexed":false,"name":"token","type":"address"},{"indexed":false,"name":"amount","type":"uint256"}],"name":"Pulled","type":"event"}
+]

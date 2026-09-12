@@ -12,6 +12,8 @@ from defi_lending_researcher import (
     RECOMMENDED_LTV,
     PositionAudit,
     audit_lending_position,
+    build_microstructure_telemetry,
+    build_oneinch_telemetry,
     calculate_health_factor,
     calculate_ltv,
     canonical_json_bytes,
@@ -124,6 +126,50 @@ class TestDefiLendingResearcher(unittest.TestCase):
         self.assertEqual(report["content_hash"], generate_content_hash(report["canonical_envelope"]))
         self.assertLessEqual(len(report["decision_context_card"].split()), 110)
         self.assertEqual(report["the_graph_telemetry"]["status"], "degraded")
+
+    def test_morpho_fallback_uses_arbitrum_sepolia_and_never_claims_graph_success(self):
+        market = fetch_or_simulate_market_telemetry("Morpho Blue (Arbitrum)")
+        with patch.dict("os.environ", {"GRAPH_NODE_URL": ""}, clear=False):
+            telemetry = build_microstructure_telemetry(market)
+        self.assertEqual(telemetry["status"], "degraded")
+        self.assertEqual(telemetry["network"], "eip155:421614")
+
+    def test_aqua_is_explicitly_unsupported_on_arbitrum_sepolia(self):
+        audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
+        with patch.dict("os.environ", {"OPENX_AQUA_ENABLED": "true", "OPENX_AQUA_CHAIN_ID": "421614"}, clear=False):
+            telemetry = build_oneinch_telemetry(audit)
+        self.assertEqual(telemetry["status"], "unsupported_chain")
+        self.assertFalse(telemetry["execution_allowed"])
+        self.assertEqual(telemetry["strategies"], [])
+
+    def test_aqua_uses_graph_history_and_finalized_rpc_balances(self):
+        audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
+        strategy_hash = "0x" + "ab" * 32
+        graph = {"data": {"strategies": [{"id": "strategy", "maker": audit.wallet_address, "app": "0x3333333333333333333333333333333333333333", "strategyHash": strategy_hash, "lifecycle": "open", "activityCount": "3", "tokens": [{"token": "0x4444444444444444444444444444444444444444"}]}], "_meta": {"block": {"number": "123"}, "hasIndexingErrors": False}}}
+        rpc_results = [
+            {"jsonrpc": "2.0", "id": 1, "result": {"number": "0x7b"}},
+            {"jsonrpc": "2.0", "id": 1, "result": "0x" + hex(42)[2:].rjust(64, "0") + "00" * 32},
+        ]
+        def response(payload):
+            mocked = MagicMock()
+            mocked.__enter__.return_value.status = 200
+            mocked.__enter__.return_value.read.return_value = json.dumps(payload).encode("utf-8")
+            return mocked
+        with patch.dict("os.environ", {"OPENX_AQUA_ENABLED": "true", "OPENX_AQUA_CHAIN_ID": "42161", "OPENX_AQUA_GRAPH_URL": "https://graph.example", "OPENX_ARBITRUM_ONE_RPC_URL": "https://rpc.example"}, clear=False):
+            with patch("urllib.request.urlopen", side_effect=[response(rpc_results[0]), response(graph), response(rpc_results[1])]) as urlopen:
+                telemetry = build_oneinch_telemetry(audit)
+        self.assertEqual(telemetry["status"], "ok")
+        self.assertEqual(telemetry["source_block"], "123")
+        self.assertEqual(telemetry["strategies"][0]["tokens"][0]["balance_raw"], "42")
+        self.assertIn("6d58b4cc", urlopen.call_args_list[-1].args[0].data.decode("utf-8"))
+
+    def test_statement_uses_successful_aqua_finalized_block(self):
+        audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
+        aqua = {"status": "ok", "source_block": "123", "strategies": [], "execution_allowed": False}
+        with patch("defi_lending_researcher.build_oneinch_telemetry", return_value=aqua):
+            report = create_statement_report(audit, report_id="11111111-1111-4111-8111-111111111111", source_block="1")
+        self.assertEqual(report["source_block"], "123")
+        self.assertEqual(report["canonical_envelope"]["source"]["block"], "123")
 
     def test_create_statement_report_rejects_exceeding_ltv(self):
         audit = PositionAudit(

@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build"
+  },
+  "devDependencies": {
+    "@graphprotocol/graph-cli": "^0.97.1",
+    "@graphprotocol/graph-ts": "^0.38.0"
+  }
+}
