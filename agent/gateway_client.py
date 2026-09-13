@@ -433,3 +433,38 @@ def submit_statement_report(agent_id: str, report: Dict[str, Any], timeout_secon
         timeout_seconds=timeout_seconds,
         require_key=True,
     )
+
+
+def get_gateway_health(timeout_seconds: float = 5.0) -> Dict[str, Any]:
+    """Pre-flight check against GET /health."""
+    url = f"{_gateway_url()}/health"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "OpenX-Agent-Python/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": "gateway_unreachable", "message": str(e)}
+
+
+
+def get_latest_statement(agent_id: str, timeout_seconds: float = 5.0) -> Dict[str, Any]:
+    """Read the latest position statement for comparison before collecting new evidence."""
+    url = f"{_gateway_url()}/v1/agents/{urllib.parse.quote(agent_id, safe='')}/statements/latest"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "OpenX-Agent-Python/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"ok": False, "error": "statement_report_not_found", "status": 404}
+        return {"ok": False, "error": "http_error", "status": e.code, "message": f"Gateway HTTP Error {e.code}"}
+    except Exception as e:
+        return {"ok": False, "error": "gateway_unreachable", "message": str(e)}

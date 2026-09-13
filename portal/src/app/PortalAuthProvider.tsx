@@ -12,6 +12,7 @@ type PortalAuth = {
   logout: () => void;
   getAccessToken: () => Promise<string | null>;
   sendArbitrumTransaction: (transaction: { to: string; data: string; value?: string }) => Promise<string | null>;
+  waitArbitrumTransaction: (transactionHash: string) => Promise<boolean>;
   signTypedData: (chainId: number, typedData: Record<string, unknown>) => Promise<string | null>;
 };
 
@@ -19,6 +20,7 @@ const unavailableAuth: PortalAuth = {
   enabled: false, ready: true, authenticated: false, walletAddress: null,
   login: () => undefined, logout: () => undefined, getAccessToken: async () => null,
   sendArbitrumTransaction: async () => null,
+  waitArbitrumTransaction: async () => false,
   signTypedData: async () => null,
 };
 
@@ -36,6 +38,17 @@ function PrivyPortalAuthProvider({ children }: { children: React.ReactNode }) {
     await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x66eee' }] });
     return await provider.request({ method: 'eth_sendTransaction', params: [{ from: walletAddress, to: transaction.to, data: transaction.data, value: transaction.value || '0x0' }] }) as string;
   };
+  const waitArbitrumTransaction = async (transactionHash: string): Promise<boolean> => {
+    const connected = wallets.find((item) => item.address.toLowerCase() === walletAddress?.toLowerCase());
+    if (!connected) return false;
+    const provider = await connected.getEthereumProvider();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const receipt = await provider.request({ method: 'eth_getTransactionReceipt', params: [transactionHash] }) as { status?: string } | null;
+      if (receipt) return receipt.status === '0x1';
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    return false;
+  };
   const signTypedData = async (chainId: number, typedData: Record<string, unknown>): Promise<string | null> => {
     const connected = wallets.find((item) => item.address.toLowerCase() === walletAddress?.toLowerCase());
     if (!connected || !walletAddress) return null;
@@ -43,7 +56,7 @@ function PrivyPortalAuthProvider({ children }: { children: React.ReactNode }) {
     await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${chainId.toString(16)}` }] });
     return await provider.request({ method: 'eth_signTypedData_v4', params: [walletAddress, JSON.stringify(typedData)] }) as string;
   };
-  return <PortalAuthContext.Provider value={{ enabled: true, ready, authenticated, walletAddress, login, logout, getAccessToken, sendArbitrumTransaction, signTypedData }}>{children}</PortalAuthContext.Provider>;
+  return <PortalAuthContext.Provider value={{ enabled: true, ready, authenticated, walletAddress, login, logout, getAccessToken, sendArbitrumTransaction, waitArbitrumTransaction, signTypedData }}>{children}</PortalAuthContext.Provider>;
 }
 
 export function PortalAuthProvider({ enabled, children }: { enabled: boolean; children: React.ReactNode }) {

@@ -19,6 +19,8 @@ portal/.env*.local
 
 # Local/generated workspace artifacts
 .DS_Store
+cache/
+out/
 portal/test-results/
 portal/tsconfig.tsbuildinfo
 gateway/.nim/

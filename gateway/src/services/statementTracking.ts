@@ -3,17 +3,32 @@ import { gatewayDatabase } from '../db/database.js';
 
 export type StatementStatus = 'received' | 'partial' | 'failed';
 export type AttestationStatus = 'pending' | 'verified' | 'unavailable_source_chain' | 'failed';
+export type GraphTelemetryStatus = 'ok' | 'degraded';
+export interface GraphTelemetry {
+  provider: 'the_graph'; protocol: 'morpho_blue' | 'aave_v3'; chain_id: 'eip155:42161'; market_id: string;
+  observed_at: string; fetched_at: string; status: GraphTelemetryStatus; reason?: string; indexed_block?: string;
+  current_utilization_bps?: number; borrow_rate_bps?: number; supply_rate_bps?: number;
+  kink_utilization_bps?: number; kink_headroom_bps?: number; hourly_utilization_bps: number[];
+  utilization_volatility_bps?: number;
+}
 export interface StatementInput {
   report_id: string; content_hash: string; visibility: 'private' | 'public'; source_chain: string;
   source_block: string; source_timestamp: string; finality: 'finalized' | 'pending'; wallet_address?: string;
   venue: string; collateral_usd: number; debt_usd: number; realized_pnl_usd?: number; unrealized_pnl_usd?: number;
   pnl_methodology: string; status?: StatementStatus; summary?: string; attestation?: { status: AttestationStatus; chain?: string; receipt?: string };
   schema_version?: 'apsd-l/2.1'; canonical_envelope?: Record<string, unknown>;
-  the_graph_telemetry?: Record<string, unknown>; oneinch_telemetry?: Record<string, unknown>;
+  the_graph_telemetry?: GraphTelemetry; oneinch_telemetry?: Record<string, unknown>;
   pnl_attribution?: Record<string, unknown>; risk_engine_audit?: Record<string, unknown>;
   actionable_allocation_vector?: Record<string, unknown>; decision_context_card?: string;
 }
 export interface StatementRecord extends StatementInput { agent_id: string; id: string; ltv: number; recommended_ltv: number; max_ltv: number; status: StatementStatus; attestation: { status: AttestationStatus; chain?: string; receipt?: string }; created_at: string; updated_at: string; }
+export interface PublicStatementContext {
+  ok: true; agent_id: string; report_id: string; generated_at: string;
+  freshness: { state: 'fresh' | 'stale' | 'unknown'; age_seconds?: number };
+  telemetry_status: GraphTelemetryStatus | 'unavailable'; context_card: string;
+  vector: { ltv_bps: number; health_factor_milli?: number; kink_headroom_bps?: number; utilization_volatility_bps?: number; risk_band?: string; recommended_action?: string };
+  verification: { statement_hash: string; attestation_status: AttestationStatus };
+}
 
 const now = () => new Date().toISOString();
 export class StatementTracking {
@@ -54,6 +69,21 @@ export class StatementTracking {
     return { record: this.row(db.prepare('SELECT * FROM statement_reports WHERE id=?').get(id) as Record<string, unknown>), created: true };
   }
   public latest(agentId: string): StatementRecord | undefined { const row = gatewayDatabase.raw().prepare('SELECT * FROM statement_reports WHERE agent_id=? ORDER BY updated_at DESC LIMIT 1').get(agentId) as Record<string, unknown> | undefined; return row && this.row(row); }
+  public latestPublicContext(agentId: string, maxAgeSeconds: number): PublicStatementContext | undefined {
+    const row = gatewayDatabase.raw().prepare("SELECT * FROM statement_reports WHERE agent_id=? AND visibility='public' AND finality='finalized' AND status IN ('received','partial') ORDER BY updated_at DESC LIMIT 1").get(agentId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const report = this.row(row); const telemetry = report.the_graph_telemetry;
+    const fetchedAt = telemetry?.fetched_at ? Date.parse(telemetry.fetched_at) : NaN;
+    const age = Number.isFinite(fetchedAt) ? Math.max(0, Math.floor((Date.now() - fetchedAt) / 1000)) : undefined;
+    const risk = report.risk_engine_audit || {}; const allocation = report.actionable_allocation_vector || {};
+    return {
+      ok: true, agent_id: report.agent_id, report_id: report.report_id, generated_at: report.updated_at,
+      freshness: age === undefined ? { state: 'unknown' } : { state: age <= maxAgeSeconds ? 'fresh' : 'stale', age_seconds: age },
+      telemetry_status: telemetry?.status || 'unavailable', context_card: report.decision_context_card || '',
+      vector: { ltv_bps: Math.round(report.ltv * 10_000), health_factor_milli: typeof risk.health_factor_milli === 'number' ? risk.health_factor_milli : undefined, kink_headroom_bps: telemetry?.kink_headroom_bps, utilization_volatility_bps: telemetry?.utilization_volatility_bps, risk_band: typeof risk.risk_level === 'string' ? risk.risk_level : undefined, recommended_action: typeof allocation.recommended_action === 'string' ? allocation.recommended_action : undefined },
+      verification: { statement_hash: report.content_hash, attestation_status: report.attestation.status },
+    };
+  }
   public leaderboard(limit = 25): StatementRecord[] { return (gatewayDatabase.raw().prepare("SELECT * FROM statement_reports WHERE visibility='public' AND status IN ('received','partial') ORDER BY COALESCE(realized_pnl_usd, unrealized_pnl_usd, 0) DESC LIMIT ?").all(Math.max(1, Math.min(limit, 100))) as Record<string, unknown>[]).map((row) => this.row(row)); }
 }
 export const statementTracking = new StatementTracking();

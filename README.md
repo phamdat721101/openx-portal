@@ -28,6 +28,68 @@ OpenX Agent Portal natively integrates XRP Ledger standards and modular agent se
 
 ## AI-Native Architecture & Code Structure
 
+OpenX follows a clean, boundary-first architecture. The agent is the only component
+that can use provider credentials and interpret raw protocol data; the Gateway is the
+trusted validation and persistence boundary; and the Portal is a read-only operator
+experience. This separation keeps The Graph credentials and raw payloads out of
+browser responses while making a report reproducible and auditable.
+
+```text
+The Graph subgraphs                 OpenX research agent
+(Aave v3 / Morpho Blue)  ──GraphQL──► fetches, normalizes, calculates risk
+                                             │
+                                             │ authenticated APSD-L report
+                                             ▼
+                                  Gateway: validate, hash, persist
+                                  SQLite WAL statement_reports
+                                             │
+                         ┌───────────────────┴───────────────────┐
+                         ▼                                       ▼
+               public CaaS context API                 Operator Portal UI
+               redacted prompt card + vector           statements, tasks, tracking
+```
+
+### The Graph data pipeline
+
+The DeFi lending researcher reads configured The Graph subgraphs for Aave v3 and
+Morpho Blue on Arbitrum. It requests a market snapshot plus a bounded history of
+utilization observations, then normalizes protocol-specific fields into one telemetry
+shape: provider, protocol, market, indexed block, timestamps, utilization, borrow and
+supply rates, kink headroom, hourly utilization, and utilization volatility.
+
+The agent treats GraphQL as an upstream data source, not as a public API dependency:
+
+- Provider URLs and bearer keys remain in the agent runtime environment
+  (`OPENX_GRAPH_*`); they are never persisted in a report or returned by the Gateway.
+- Invalid, incomplete, timed-out, or unconfigured Graph data produces an explicit
+  `degraded` telemetry status and reason. The researcher can still produce a truthful
+  report from its safe fallback inputs; it never labels unavailable data as fresh.
+- The Gateway never calls The Graph while serving context. It reads the already
+  validated statement from SQLite, so public reads are fast, deterministic, and do not
+  consume a provider credential.
+
+### From research run to statement report
+
+Each research run computes position risk from collateral and debt, including LTV,
+health factor, utilization/kink headroom, volatility, and an allocation recommendation.
+The hard 40% LTV gate is applied before a report can be submitted. The agent then builds
+an APSD-L v2.1 canonical envelope, serializes it deterministically, and calculates a
+SHA-256 `content_hash`. The envelope contains the normalized The Graph telemetry,
+calculation/audit metadata, allocation vector, and a compact `decision_context_card`.
+
+The agent sends that report with its agent credential to
+`POST /v1/agents/:agentId/statements`. The Gateway applies strict schema and risk
+validation, rejects conflicts, persists the accepted record in `statement_reports`, and
+records it for agent knowledge/tracking. A public, finalized, non-failed report can then
+be read through `GET /v1/agents/:agentId/context/defi-lending` or formatted for a
+downstream prompt through `POST /v1/agents/:agentId/context/query`. Those public
+projections contain the compact context card, freshness, risk vector, and hash/attestation
+state — never a wallet address, raw provider response, or secret.
+
+For the detailed schema, failure modes, and executable verification seams, see the
+[The Graph CaaS PRD](docs/prd/012-the-graph-data-pipeline-agent-context-service.md) and
+[system map](docs/features/the-graph-data-pipeline-agent-context-service-map.md).
+
 ```text
 xrpl-openx-portal/
 ├── agent/                  # Autonomous Agent Runtime

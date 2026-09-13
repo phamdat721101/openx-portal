@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from env_loader import load_openx_env
 from gateway_client import (
+    get_gateway_health,
+    get_latest_statement,
     submit_candidate_skill,
     submit_memory_episode,
     submit_statement_report,
@@ -198,77 +200,82 @@ def _decimal(value: float, places: int = 2) -> str:
 
 
 def build_microstructure_telemetry(market: LendingMarketMetrics) -> Dict[str, Any]:
-    """
-    Ingest market microstructure telemetry from a configured Graph Node.
-    Falls back safely to degraded telemetry if unconfigured or unreachable.
-    """
+    """Fetch a configured Morpho/Aave subgraph and return a bounded public telemetry projection."""
     current = int(round(market.utilization_pct * 100))
     hourly = [max(0, min(10_000, current + delta)) for delta in (-140, -90, -50, -20, 0, 30, 60, 20)]
     mean = sum(hourly) / len(hourly)
     volatility = int(round(math.sqrt(sum((value - mean) ** 2 for value in hourly) / len(hourly))))
     kink = 9_000
-    network = "eip155:421614" if market.venue == "Morpho Blue (Arbitrum)" else "eip155:42161"
-
-    graph_node_url = os.environ.get("GRAPH_NODE_URL", "").strip()
-    if graph_node_url and market.venue == "Morpho Blue (Arbitrum)":
-        try:
-            query = """query MorphoMarket($marketId: ID!) { market(id: $marketId) { id totalSupplyAssets totalBorrowAssets utilizationRate } marketHourlySnapshots(first: 24, orderBy: timestamp, orderDirection: desc, where: { market: $marketId }) { utilizationRate } }"""
-            req = urllib.request.Request(
-                graph_node_url,
-                data=json.dumps({"query": query, "variables": {"marketId": os.environ.get("MORPHO_MARKET_ID", "")}}).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": "openx-defi-researcher/2.1"},
-            )
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
-                if resp.status == 200:
-                    payload = json.loads(resp.read().decode("utf-8"))
-                    data = payload.get("data", {})
-                    graph_market = data.get("market")
-                    snapshots = data.get("marketHourlySnapshots")
-                    if not isinstance(graph_market, dict) or not isinstance(snapshots, list):
-                        raise ValueError("morpho_graph_response_missing_market")
-                    raw_utilization = graph_market.get("utilizationRate")
-                    if raw_utilization is None:
-                        supplied, borrowed = graph_market.get("totalSupplyAssets"), graph_market.get("totalBorrowAssets")
-                        raw_utilization = float(borrowed) / float(supplied) if float(supplied) > 0 else None
-                    if raw_utilization is None:
-                        raise ValueError("morpho_graph_response_missing_utilization")
-                    current_from_graph = int(round(float(raw_utilization) * 10_000))
-                    hourly_from_graph = [int(round(float(item["utilizationRate"]) * 10_000)) for item in snapshots if isinstance(item, dict) and item.get("utilizationRate") is not None]
-                    if not hourly_from_graph:
-                        raise ValueError("morpho_graph_response_missing_snapshots")
-                    graph_mean = sum(hourly_from_graph) / len(hourly_from_graph)
-                    graph_volatility = int(round(math.sqrt(sum((value - graph_mean) ** 2 for value in hourly_from_graph) / len(hourly_from_graph))))
-                    return {
-                        "status": "ok",
-                        "data_status": "ok",
-                        "node_endpoint": graph_node_url,
-                        "subgraph_id": "morpho-blue-arbitrum-sepolia",
-                        "network": network,
-                        "market": market.venue,
-                        "observed_at": market.timestamp,
-                        "current_utilization_bps": current_from_graph,
-                        "kink_utilization_bps": kink,
-                        "kink_headroom_bps": kink - current_from_graph,
-                        "hourly_utilization_bps": hourly_from_graph,
-                        "utilization_volatility_bps": graph_volatility,
-                        "liquidations_24h": 0,
-                    }
-        except Exception as exc:
-            print(f"SEAM:THEGRAPH:DEGRADED_FALLBACK reason={type(exc).__name__}")
-
-    return {
-        "status": "degraded",
-        "reason": "subgraph_not_configured",
-        "network": network,
-        "market": market.venue,
-        "observed_at": market.timestamp,
-        "current_utilization_bps": current,
-        "kink_utilization_bps": kink,
-        "kink_headroom_bps": kink - current,
-        "hourly_utilization_bps": hourly,
-        "utilization_volatility_bps": volatility,
-        "liquidations_24h": 0,
-    }
+    protocol = "morpho_blue" if market.venue == "Morpho Blue (Arbitrum)" else "aave_v3" if market.venue == "Aave v3 (Arbitrum)" else None
+    env_prefix = "MORPHO" if protocol == "morpho_blue" else "AAVE"
+    endpoint = os.environ.get(f"OPENX_GRAPH_{env_prefix}_URL", "").strip() if protocol else ""
+    api_key = os.environ.get(f"OPENX_GRAPH_{env_prefix}_API_KEY", "").strip() if protocol else ""
+    market_id = os.environ.get(f"OPENX_GRAPH_{env_prefix}_MARKET_ID", "").strip() if protocol else ""
+    if protocol == "aave_v3" and not market_id:
+        # Backward-compatible bridge for early local configurations.
+        market_id = os.environ.get("OPENX_GRAPH_AAVE_RESERVE_ID", "").strip()
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    def degraded(reason: str) -> Dict[str, Any]:
+        print(f"SEAM:THEGRAPH:DEGRADED_FALLBACK reason={reason}")
+        return {"provider": "the_graph", "protocol": protocol or "aave_v3", "chain_id": "eip155:42161", "market_id": market_id or market.venue, "observed_at": market.timestamp, "fetched_at": fetched_at, "status": "degraded", "reason": reason, "current_utilization_bps": current, "kink_utilization_bps": kink, "kink_headroom_bps": kink - current, "hourly_utilization_bps": hourly, "utilization_volatility_bps": volatility}
+    if not protocol or not endpoint or not market_id:
+        return degraded("not_configured")
+    query = """query MorphoMarket($id: ID!) { market(id: $id) { id utilizationRate totalSupplyAssets totalBorrowAssets } marketHourlySnapshots(first: 24, orderBy: timestamp, orderDirection: desc, where: { market: $id }) { utilizationRate timestamp } }""" if protocol == "morpho_blue" else """query AaveMarket($id: ID!) { market(id: $id) { id totalDepositBalanceUSD totalBorrowBalanceUSD rates { side type rate } } marketHourlySnapshots(first: 24, orderBy: timestamp, orderDirection: desc, where: { market: $id }) { timestamp totalDepositBalanceUSD totalBorrowBalanceUSD } }"""
+    try:
+        headers = {"Content-Type": "application/json", "User-Agent": "openx-defi-researcher/2.1"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(endpoint, data=json.dumps({"query": query, "variables": {"id": market_id}}).encode("utf-8"), headers=headers)
+        timeout = float(os.environ.get("OPENX_GRAPH_TIMEOUT_SECONDS", "3.5"))
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", getattr(response, "code", 200))
+            if status != 200:
+                return degraded("upstream_http")
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict) or payload.get("errors"):
+            return degraded("graphql_error")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        entity = data.get("market")
+        snapshots = data.get("marketHourlySnapshots")
+        if not isinstance(entity, dict) or not isinstance(snapshots, list):
+            return degraded("invalid_response")
+        raw_utilization = entity.get("utilizationRate")
+        if raw_utilization is None:
+            supplied_key = "totalSupplyAssets" if protocol == "morpho_blue" else "totalDepositBalanceUSD"
+            borrowed_key = "totalBorrowAssets" if protocol == "morpho_blue" else "totalBorrowBalanceUSD"
+            supplied, borrowed = entity.get(supplied_key), entity.get(borrowed_key)
+            raw_utilization = float(borrowed) / float(supplied) if float(supplied or 0) > 0 else None
+        samples = []
+        for item in snapshots:
+            if not isinstance(item, dict):
+                continue
+            if item.get("utilizationRate") is not None:
+                samples.append(int(round(float(item["utilizationRate"]) * 10_000)))
+                continue
+            supplied, borrowed = item.get("totalDepositBalanceUSD"), item.get("totalBorrowBalanceUSD")
+            if float(supplied or 0) > 0:
+                samples.append(int(round(float(borrowed) / float(supplied) * 10_000)))
+        if raw_utilization is None or not samples:
+            return degraded("missing_data")
+        observed = str(next((item.get("timestamp") for item in snapshots if isinstance(item, dict) and item.get("timestamp")), market.timestamp))
+        if observed.isdigit():
+            observed = datetime.fromtimestamp(int(observed), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        sample_mean = sum(samples) / len(samples)
+        current_graph = int(round(float(raw_utilization) * 10_000))
+        rates = entity.get("rates") if isinstance(entity.get("rates"), list) else []
+        if protocol == "aave_v3":
+            borrow_rate = next((rate.get("rate", 0) for rate in rates if isinstance(rate, dict) and rate.get("side") == "BORROWER" and rate.get("type") == "VARIABLE"), 0)
+            supply_rate = next((rate.get("rate", 0) for rate in rates if isinstance(rate, dict) and rate.get("side") == "LENDER" and rate.get("type") == "VARIABLE"), 0)
+            borrow_rate_bps, supply_rate_bps = int(round(float(borrow_rate) * 100)), int(round(float(supply_rate) * 100))
+        else:
+            borrow_rate_bps, supply_rate_bps = int(round(float(entity.get("variableBorrowRate", 0)) * 10_000)), int(round(float(entity.get("liquidityRate", 0)) * 10_000))
+        return {"provider": "the_graph", "protocol": protocol, "chain_id": "eip155:42161", "market_id": market_id, "observed_at": observed if observed.endswith("Z") else market.timestamp, "fetched_at": fetched_at, "status": "ok", "current_utilization_bps": current_graph, "borrow_rate_bps": borrow_rate_bps, "supply_rate_bps": supply_rate_bps, "kink_utilization_bps": kink, "kink_headroom_bps": kink - current_graph, "hourly_utilization_bps": samples, "utilization_volatility_bps": int(round(math.sqrt(sum((value - sample_mean) ** 2 for value in samples) / len(samples))))}
+    except urllib.error.HTTPError:
+        return degraded("upstream_http")
+    except (urllib.error.URLError, TimeoutError):
+        return degraded("timeout")
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return degraded("invalid_response")
 
 
 def _is_address(value: Any) -> bool:
@@ -546,7 +553,7 @@ def create_statement_report(
     card = build_decision_context_card(audit, microstructure, oneinch)
     # Only strings, integers, booleans, arrays, and objects occur in this envelope.
     # This is deliberate: its sorted JSON serialization is identical in Python and Node.
-    source_network = microstructure["network"] if audit.venue == "Morpho Blue (Arbitrum)" else "eip155:42161"
+    source_network = microstructure["chain_id"]
     canonical_envelope = {
         "schema_version": APSD_L_VERSION,
         "report_id": r_id,
@@ -580,6 +587,58 @@ def create_statement_report(
     return report
 
 
+def compare_with_previous_statement(
+    current_audit: PositionAudit,
+    previous_report: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Compare current observation with previous statement.
+    Measures changes in LTV, collateral, debt, utilization, health factor, and telemetry status.
+    """
+    if not previous_report:
+        return {
+            "status": "first_observation",
+            "summary": "First observation recorded for this agent.",
+            "changes": [],
+        }
+
+    prev_ltv = previous_report.get("ltv")
+    prev_collateral = previous_report.get("collateral_usd")
+    prev_debt = previous_report.get("debt_usd")
+    prev_block = previous_report.get("source_block")
+    prev_audit = previous_report.get("risk_engine_audit") or {}
+    prev_graph = previous_report.get("the_graph_telemetry") or {}
+    prev_oneinch = previous_report.get("oneinch_telemetry") or {}
+
+    changes = []
+    if prev_ltv is not None:
+        ltv_diff = current_audit.ltv - float(prev_ltv)
+        if abs(ltv_diff) > 0.0001:
+            changes.append(f"LTV delta: {ltv_diff * 100:+.2f}% ({float(prev_ltv) * 100:.2f}% -> {current_audit.ltv * 100:.2f}%)")
+    if prev_collateral is not None:
+        col_diff = current_audit.collateral_usd - float(prev_collateral)
+        if abs(col_diff) > 0.01:
+            changes.append(f"Collateral delta: ${col_diff:+,.2f} (${float(prev_collateral):,.2f} -> ${current_audit.collateral_usd:,.2f})")
+    if prev_debt is not None:
+        debt_diff = current_audit.debt_usd - float(prev_debt)
+        if abs(debt_diff) > 0.01:
+            changes.append(f"Debt delta: ${debt_diff:+,.2f} (${float(prev_debt):,.2f} -> ${current_audit.debt_usd:,.2f})")
+    if prev_block and str(prev_block) != str(current_audit.chain):
+        changes.append(f"Previous source block: {prev_block}")
+
+    return {
+        "status": "compared",
+        "previous_report_id": previous_report.get("report_id"),
+        "previous_content_hash": previous_report.get("content_hash"),
+        "previous_source_block": str(prev_block) if prev_block else None,
+        "previous_ltv": prev_ltv,
+        "previous_risk_level": prev_audit.get("risk_level", "unknown"),
+        "previous_graph_status": prev_graph.get("status", "unknown"),
+        "previous_oneinch_status": prev_oneinch.get("status", "unknown"),
+        "changes": changes if changes else ["No material position variance observed."],
+    }
+
+
 def run_defi_lending_research(
     agent_id: Optional[str] = None,
     venue: str = "Aave v3 (Arbitrum)",
@@ -592,9 +651,15 @@ def run_defi_lending_research(
 ) -> Dict[str, Any]:
     """
     End-to-end orchestration:
-    1. Audits position & lending markets
-    2. Runs TaskReporter with ordered working logs
-    3. Synthesizes canonical APSD v1 report and content_hash
+    1. Pre-flight health check (GET /health)
+    2. Runs TaskReporter with ordered lifecycle phases:
+       - ingesting_market_telemetry
+       - reading_previous_statement
+       - auditing_position_ltv
+       - synthesizing_apsd_l_v21
+       - submitting_statement
+       - completed | failed
+    3. Synthesizes canonical APSD-L v2.1 report and content_hash
     4. Submits statement report to OpenX Gateway
     5. Submits protocol research memory episode
     6. Registers reusable skill candidate in Gateway
@@ -606,7 +671,16 @@ def run_defi_lending_research(
     print(f"[defi-lending-researcher] Starting research run on venue: {venue}")
     print(f"  - Collateral: ${collateral_usd:,.2f} | Debt: ${debt_usd:,.2f}")
 
-    # Step 1: Position audit
+    # Pre-flight check
+    if not dry_run and resolved_agent_id:
+        health = get_gateway_health()
+        if not health.get("ok"):
+            print(f"[defi-lending-researcher] Pre-flight warning: Gateway health returned {health}")
+
+    # Step 1: Ingest market telemetry
+    market = fetch_or_simulate_market_telemetry(venue)
+
+    # Step 2: Position audit
     audit = audit_lending_position(
         venue=venue,
         collateral_usd=collateral_usd,
@@ -621,7 +695,7 @@ def run_defi_lending_research(
         print(f"[defi-lending-researcher] ERROR: {error_msg}")
         return {"ok": False, "error": "ltv_cap_exceeded", "message": error_msg}
 
-    # Step 2: Synthesize canonical statement report
+    # Step 3: Synthesize canonical statement report
     report = create_statement_report(audit, visibility=visibility)
     print(f"  - Canonical report ID: {report['report_id']}")
     print(f"  - Content SHA-256 Hash: {report['content_hash']}")
@@ -635,9 +709,10 @@ def run_defi_lending_research(
             "report": report,
         }
 
-    # Step 3: Lifecycle reporting via TaskReporter
+    # Step 4: Lifecycle reporting via TaskReporter
     tools_used = ["defi_lending_analyzer", "openx_gateway_client"]
     submission_results: Dict[str, Any] = {}
+    comparison: Dict[str, Any] = {"status": "first_observation"}
 
     with TaskReporter(
         agent_id=resolved_agent_id,
@@ -647,20 +722,46 @@ def run_defi_lending_research(
         category="defi_research",
         tools=tools_used,
     ) as reporter:
-        reporter.update("evaluating_lending_markets", 20, f"Queried reserve liquidity and APYs on {venue}.")
+        reporter.update(
+            "ingesting_market_telemetry",
+            20,
+            f"Ingested market reserve liquidity and oracle telemetry on {venue} ({market.chain}).",
+        )
+        time.sleep(0.05)
+
+        # Read previous statement
+        reporter.update(
+            "reading_previous_statement",
+            40,
+            f"Querying previous statement for agent {resolved_agent_id[:8]}…",
+        )
+        try:
+            prev_res = get_latest_statement(resolved_agent_id)
+            prev_report = prev_res.get("report") if prev_res.get("ok") else None
+            comparison = compare_with_previous_statement(audit, prev_report)
+        except Exception as exc:
+            print(f"[defi-lending-researcher] Notice: could not read previous statement: {exc}")
+            comparison = {"status": "first_observation", "reason": "read_failed"}
         time.sleep(0.05)
 
         reporter.update(
             "auditing_position_ltv",
-            50,
+            60,
             f"Audited LTV {audit.ltv*100:.2f}% against max {MAX_ALLOWED_LTV*100:.0f}% cap. Health Factor: {audit.health_factor:.2f}.",
         )
         time.sleep(0.05)
 
         reporter.update(
-            "synthesizing_canonical_statement",
-            75,
-            f"Generated canonical APSD v1 report hash: {report['content_hash'][:16]}…",
+            "synthesizing_apsd_l_v21",
+            80,
+            f"Synthesized canonical APSD-L v2.1 report with content_hash {report['content_hash'][:16]}…",
+        )
+        time.sleep(0.05)
+
+        reporter.update(
+            "submitting_statement",
+            90,
+            "Submitting authenticated statement report to Gateway.",
         )
 
         # Submit statement report to Gateway
@@ -690,12 +791,10 @@ def run_defi_lending_research(
                 agent_id=resolved_agent_id,
                 skill_slug="statement-tracking-researcher",
                 display_name="DeFi Statement Tracking Researcher",
-                capability_ids=["lending_research", "ltv_audit", "apsd_v1_statement"],
+                capability_ids=["lending_research", "ltv_audit", "apsd_v1_statement", "apsd_l_v21"],
                 code_template="defi_lending_researcher.py",
             )
             submission_results["candidate_skill"] = skill_res
-
-        reporter.update("completed_portal_submission", 95, "Statement report & REM memory archived to Gateway.")
 
     # Record observed tool usage
     usage_res = submit_usage_event(
@@ -707,13 +806,43 @@ def run_defi_lending_research(
     )
     submission_results["usage_event"] = usage_res
 
+    returned_report = stmt_res.get("report") if isinstance(stmt_res.get("report"), dict) else report
+    attestation = returned_report.get("attestation") if isinstance(returned_report.get("attestation"), dict) else {}
+    if not attestation and isinstance(returned_report.get("attestation_json"), str):
+        try:
+            attestation = json.loads(returned_report["attestation_json"])
+        except Exception:
+            attestation = {"status": "pending"}
+
     return {
         "ok": True,
         "task_id": task_id,
+        "statement_id": returned_report.get("id"),
+        "report_id": report["report_id"],
+        "created": stmt_res.get("created", True),
+        "content_hash": report["content_hash"],
+        "venue": report["venue"],
+        "wallet_address": report.get("wallet_address"),
+        "source_chain": report["source_chain"],
+        "source_block": report["source_block"],
+        "finality": report["finality"],
+        "risk_band": audit.risk_level,
+        "ltv_bps": round(audit.ltv * 10_000),
+        "health_factor": audit.health_factor,
+        "recommended_action": report.get("actionable_allocation_vector", {}).get("recommended_action", "MAINTAIN"),
+        "telemetry_status": {
+            "the_graph": report.get("the_graph_telemetry", {}).get("status"),
+            "the_graph_reason": report.get("the_graph_telemetry", {}).get("reason"),
+            "oneinch": report.get("oneinch_telemetry", {}).get("status"),
+            "oneinch_reason": report.get("oneinch_telemetry", {}).get("reason"),
+        },
+        "previous_comparison": comparison,
+        "attestation_status": attestation.get("status", "pending"),
         "audit": asdict(audit),
         "report": report,
         "gateway_submissions": submission_results,
     }
+
 
 
 def scan_all_allowlisted_venues() -> List[Dict[str, Any]]:

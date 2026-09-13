@@ -205,15 +205,17 @@ const TrustLineSchema = z.object({ limit: z.string().regex(/^\d+(\.\d+)?$/).defa
 const RoutingPolicySchema = z.object({ rules: z.array(z.object({ category: z.string().trim().min(1).max(80), model: z.string().trim().min(1).max(160), minimum_samples: z.number().int().min(20).default(20) }).strict()).min(1).max(30) }).strict();
 const WorkingLogSchema = z.object({ event_id: z.string().uuid(), sequence: z.number().int().nonnegative(), phase: z.string().trim().min(1).max(120), progress_pct: z.number().min(0).max(100).optional(), kind: z.enum(['started', 'phase', 'decision', 'artifact', 'error', 'completed', 'failed']), markdown: z.string().trim().min(1).max(64_000).refine((value) => !/<[^>]*>/i.test(value), 'raw_html_not_allowed'), created_at: z.string().datetime() }).strict();
 const JsonRecord = z.record(z.unknown());
-const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_hash: z.string().regex(/^[a-f0-9]{64}$/i), visibility: z.enum(['private', 'public']), source_chain: z.string().trim().min(1).max(80), source_block: z.string().trim().min(1).max(80), source_timestamp: z.string().datetime(), finality: z.enum(['finalized', 'pending']), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(), venue: z.string().trim().min(1).max(120), collateral_usd: z.number().nonnegative().max(1e12), debt_usd: z.number().nonnegative().max(1e12), realized_pnl_usd: z.number().finite().optional(), unrealized_pnl_usd: z.number().finite().optional(), pnl_methodology: z.string().trim().min(1).max(500), status: z.enum(['received', 'partial', 'failed']).optional(), summary: z.string().trim().max(2000).optional(), attestation: z.object({ status: z.enum(['pending', 'verified', 'unavailable_source_chain', 'failed']), chain: z.string().trim().max(80).optional(), receipt: z.string().trim().max(1000).optional() }).strict().optional(), schema_version: z.literal('apsd-l/2.1').optional(), canonical_envelope: JsonRecord.optional(), the_graph_telemetry: JsonRecord.optional(), oneinch_telemetry: JsonRecord.optional(), pnl_attribution: JsonRecord.optional(), risk_engine_audit: JsonRecord.optional(), actionable_allocation_vector: JsonRecord.optional(), decision_context_card: z.string().trim().max(1000).optional() }).strict().superRefine((value, ctx) => {
+const GraphTelemetrySchema = z.object({ provider: z.literal('the_graph'), protocol: z.enum(['morpho_blue', 'aave_v3']), chain_id: z.literal('eip155:42161'), market_id: z.string().trim().min(1).max(200), indexed_block: z.string().trim().max(80).optional(), observed_at: z.string().datetime(), fetched_at: z.string().datetime(), status: z.enum(['ok', 'degraded']), reason: z.enum(['not_configured', 'timeout', 'upstream_http', 'graphql_error', 'invalid_response', 'missing_data']).optional(), current_utilization_bps: z.number().int().min(0).max(10_000).optional(), borrow_rate_bps: z.number().int().min(0).max(1_000_000).optional(), supply_rate_bps: z.number().int().min(0).max(1_000_000).optional(), kink_utilization_bps: z.number().int().min(0).max(10_000).optional(), kink_headroom_bps: z.number().int().min(-10_000).max(10_000).optional(), hourly_utilization_bps: z.array(z.number().int().min(0).max(10_000)).max(48), utilization_volatility_bps: z.number().int().min(0).max(10_000).optional() }).strict();
+const StatementReportSchema = z.object({ report_id: z.string().uuid(), content_hash: z.string().regex(/^[a-f0-9]{64}$/i), visibility: z.enum(['private', 'public']), source_chain: z.string().trim().min(1).max(80), source_block: z.string().trim().min(1).max(80), source_timestamp: z.string().datetime(), finality: z.enum(['finalized', 'pending']), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(), venue: z.string().trim().min(1).max(120), collateral_usd: z.number().nonnegative().max(1e12), debt_usd: z.number().nonnegative().max(1e12), realized_pnl_usd: z.number().finite().optional(), unrealized_pnl_usd: z.number().finite().optional(), pnl_methodology: z.string().trim().min(1).max(500), status: z.enum(['received', 'partial', 'failed']).optional(), summary: z.string().trim().max(2000).optional(), attestation: z.object({ status: z.enum(['pending', 'verified', 'unavailable_source_chain', 'failed']), chain: z.string().trim().max(80).optional(), receipt: z.string().trim().max(1000).optional() }).strict().optional(), schema_version: z.literal('apsd-l/2.1').optional(), canonical_envelope: JsonRecord.optional(), the_graph_telemetry: GraphTelemetrySchema.optional(), oneinch_telemetry: JsonRecord.optional(), pnl_attribution: JsonRecord.optional(), risk_engine_audit: JsonRecord.optional(), actionable_allocation_vector: JsonRecord.optional(), decision_context_card: z.string().trim().max(1000).optional() }).strict().superRefine((value, ctx) => {
   if (value.collateral_usd !== 0 && value.debt_usd / value.collateral_usd > .4) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'LTV exceeds configured 40% maximum' });
   const v2 = value.schema_version === 'apsd-l/2.1';
   if (v2 && !value.canonical_envelope) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'canonical_envelope_required_for_v2' });
   if (v2 && value.canonical_envelope && statementHash(value.canonical_envelope) !== value.content_hash.toLowerCase()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'statement_content_hash_mismatch' });
 });
+const ContextQuerySchema = z.object({ task_type: z.literal('lending_rebalance'), format: z.enum(['prompt_prefix', 'json']), include_proof: z.boolean().default(true) }).strict();
 const StatementExecutionPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/) }).strict();
 const StatementExecutionSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
-const AllocationPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), source_amount: z.string().regex(/^\d+$/), slippage_bps: z.number().int().min(1).max(500).default(50) }).strict();
+const AllocationPrepareSchema = z.object({ wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), usdc_collateral_amount: z.string().regex(/^\d+$/) }).strict();
 const AllocationSubmitSchema = z.object({ transaction_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/) }).strict();
 const StatementRebalancePrepareSchema = z.object({ report_id: z.string().uuid(), wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), target_ltv: z.number().min(.2).max(.32).default(.28), mode: z.literal('fusion').default('fusion') }).strict();
 const StatementRebalanceSubmitSchema = z.object({ order_id: z.string().trim().min(1).max(200), signed_order: JsonRecord }).strict();
@@ -447,7 +449,10 @@ if (shouldRunGateway && process.env.NODE_ENV !== 'test') {
   dailyAuditTimer.unref();
   const dreamAuditTimer = setInterval(() => { void auditorService.processDueDreamAudits(); }, 60_000);
   dreamAuditTimer.unref();
+  const creditcoinAttestationTimer = setInterval(() => { void statementExecution.retryDueCreditcoinAttestations(); }, 30_000);
+  creditcoinAttestationTimer.unref();
   void auditorService.processDueDreamAudits();
+  void statementExecution.retryDueCreditcoinAttestations();
   resumeDreamReconciliation();
 }
 
@@ -820,6 +825,24 @@ app.get('/v1/agents/:agentId/statements/latest', (req: Request, res: Response): 
   res.json({ ok: true, report });
 });
 app.get('/v1/statements/leaderboard', (req: Request, res: Response): void => { res.json({ ok: true, reports: statementTracking.leaderboard(Number(req.query.limit) || 25) }); });
+/** Public, read-only projection of a finalized public report. It never contacts providers or exposes wallet data. */
+const publicStatementContext = (agentId: string) => statementTracking.latestPublicContext(agentId, Math.max(1, Number(process.env.OPENX_CONTEXT_MAX_AGE_SECONDS) || 900));
+app.get('/v1/agents/:agentId/context/defi-lending', (req: Request, res: Response): void => {
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'context_not_found' }); return; }
+  const context = publicStatementContext(req.params.agentId);
+  if (!context) { res.status(404).json({ ok: false, error: 'context_not_found' }); return; }
+  res.json(context);
+});
+app.post('/v1/agents/:agentId/context/query', (req: Request, res: Response): void => {
+  const parsed = ContextQuerySchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ ok: false, error: 'invalid_context_query' }); return; }
+  if (!agentRegistry.get(req.params.agentId)) { res.status(404).json({ ok: false, error: 'context_not_found' }); return; }
+  const context = publicStatementContext(req.params.agentId);
+  if (!context) { res.status(404).json({ ok: false, error: 'context_not_found' }); return; }
+  if (parsed.data.format === 'json') { res.json(context); return; }
+  const proof = parsed.data.include_proof ? ` Statement hash ${context.verification.statement_hash}; attestation ${context.verification.attestation_status}.` : '';
+  res.json({ ok: true, system_prompt_prefix: `Active lending context (${context.telemetry_status}, ${context.freshness.state}): ${context.context_card}${proof}`, freshness: context.freshness, telemetry_status: context.telemetry_status });
+});
 
 /** Config-gated provider pass-through: the Gateway never invents or signs Fusion typed data. */
 app.post('/v1/agents/:agentId/statements/rebalance/prepare', async (req: Request, res: Response): Promise<void> => {
@@ -870,7 +893,7 @@ app.post('/v1/agents/:agentId/statements/:reportId/allocations/prepare', async (
   const report = statementTracking.latest(req.params.agentId);
   if (!report || report.report_id !== req.params.reportId) { res.status(404).json({ ok: false, error: 'statement_report_not_found' }); return; }
   if (report.finality !== 'finalized' || report.status === 'failed' || report.ltv > .4) { res.status(409).json({ ok: false, error: 'allocation_risk_gate_rejected' }); return; }
-  try { res.status(201).json({ ok: true, ...(await allocationExecution.prepare(req.params.agentId, report.report_id, report.content_hash, parsed.data.wallet_address, parsed.data.source_amount, parsed.data.slippage_bps)) }); }
+  try { res.status(201).json({ ok: true, ...(await allocationExecution.prepare(req.params.agentId, report.report_id, report.content_hash, parsed.data.wallet_address, parsed.data.usdc_collateral_amount)) }); }
   catch (error) { res.status(409).json({ ok: false, error: error instanceof Error ? error.message : 'allocation_prepare_failed' }); }
 });
 app.post('/v1/agents/:agentId/statements/allocations/:executionId/submit', async (req: Request, res: Response): Promise<void> => {

@@ -17,6 +17,7 @@ from defi_lending_researcher import (
     calculate_health_factor,
     calculate_ltv,
     canonical_json_bytes,
+    compare_with_previous_statement,
     create_statement_report,
     evaluate_risk_level,
     fetch_or_simulate_market_telemetry,
@@ -120,19 +121,41 @@ class TestDefiLendingResearcher(unittest.TestCase):
         self.assertEqual(report["attestation"]["status"], "pending")
 
     def test_v21_envelope_hash_and_context_are_deterministic(self):
-        audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
-        report = create_statement_report(audit, report_id="11111111-1111-4111-8111-111111111111", source_block="123")
-        self.assertEqual(report["schema_version"], "apsd-l/2.1")
-        self.assertEqual(report["content_hash"], generate_content_hash(report["canonical_envelope"]))
-        self.assertLessEqual(len(report["decision_context_card"].split()), 110)
-        self.assertEqual(report["the_graph_telemetry"]["status"], "degraded")
+        with patch.dict("os.environ", {"OPENX_GRAPH_AAVE_URL": "", "OPENX_GRAPH_MORPHO_URL": ""}):
+            audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
+            report = create_statement_report(audit, report_id="11111111-1111-4111-8111-111111111111", source_block="123")
+            self.assertEqual(report["schema_version"], "apsd-l/2.1")
+            self.assertEqual(report["content_hash"], generate_content_hash(report["canonical_envelope"]))
+            self.assertLessEqual(len(report["decision_context_card"].split()), 110)
+            self.assertEqual(report["the_graph_telemetry"]["status"], "degraded")
 
-    def test_morpho_fallback_uses_arbitrum_sepolia_and_never_claims_graph_success(self):
+    def test_morpho_fallback_uses_arbitrum_one_and_never_claims_graph_success(self):
         market = fetch_or_simulate_market_telemetry("Morpho Blue (Arbitrum)")
         with patch.dict("os.environ", {"GRAPH_NODE_URL": ""}, clear=False):
             telemetry = build_microstructure_telemetry(market)
         self.assertEqual(telemetry["status"], "degraded")
-        self.assertEqual(telemetry["network"], "eip155:421614")
+        self.assertEqual(telemetry["chain_id"], "eip155:42161")
+        self.assertEqual(telemetry["reason"], "not_configured")
+
+    def test_aave_graph_adapter_normalizes_a_configured_response(self):
+        market = fetch_or_simulate_market_telemetry("Aave v3 (Arbitrum)")
+        payload = {"data": {"market": {"id": "market-1", "totalDepositBalanceUSD": "100", "totalBorrowBalanceUSD": "75", "rates": [{"side": "BORROWER", "type": "VARIABLE", "rate": "5.2"}, {"side": "LENDER", "type": "VARIABLE", "rate": "3.1"}]}, "marketHourlySnapshots": [{"timestamp": "1767225600", "totalDepositBalanceUSD": "100", "totalBorrowBalanceUSD": "74"}, {"timestamp": "1767229200", "totalDepositBalanceUSD": "100", "totalBorrowBalanceUSD": "75"}]}}
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+        manager = MagicMock()
+        manager.__enter__.return_value = response
+        env = {"OPENX_GRAPH_AAVE_URL": "https://graph.example", "OPENX_GRAPH_AAVE_API_KEY": "test-graph-key", "OPENX_GRAPH_AAVE_MARKET_ID": "market-1"}
+        with patch.dict("os.environ", env, clear=False):
+            with patch("urllib.request.urlopen", return_value=manager) as urlopen:
+                telemetry = build_microstructure_telemetry(market)
+        self.assertEqual(telemetry["status"], "ok")
+        self.assertEqual(telemetry["protocol"], "aave_v3")
+        self.assertEqual(telemetry["chain_id"], "eip155:42161")
+        self.assertEqual(telemetry["current_utilization_bps"], 7500)
+        self.assertEqual(telemetry["borrow_rate_bps"], 520)
+        self.assertEqual(telemetry["supply_rate_bps"], 310)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Authorization"), "Bearer test-graph-key")
 
     def test_aqua_is_explicitly_unsupported_on_arbitrum_sepolia(self):
         audit = audit_lending_position("Aave v3 (Arbitrum)", 10000, 3000, "0x2222222222222222222222222222222222222222")
@@ -250,6 +273,28 @@ class TestDefiLendingResearcher(unittest.TestCase):
         self.assertIn("candidate_skill", result["gateway_submissions"])
         # Multiple calls: TaskReporter start/heartbeats, statement report, memory episode, candidate skill, usage event
         self.assertGreaterEqual(mock_urlopen.call_count, 3)
+
+    def test_compare_with_previous_statement(self):
+        audit = audit_lending_position("Aave v3 (Arbitrum)", 15000.0, 4200.0)
+        # First observation
+        comp_first = compare_with_previous_statement(audit, None)
+        self.assertEqual(comp_first["status"], "first_observation")
+
+        # Compared with previous
+        prev_report = {
+            "report_id": "prev-123",
+            "content_hash": "a" * 64,
+            "ltv": 0.25,
+            "collateral_usd": 12000.0,
+            "debt_usd": 3000.0,
+            "source_block": "500000000",
+            "risk_engine_audit": {"risk_level": "CONSERVATIVE_SAFE", "ltv_bps": 2500},
+        }
+        comp = compare_with_previous_statement(audit, prev_report)
+        self.assertEqual(comp["status"], "compared")
+        self.assertEqual(comp["previous_report_id"], "prev-123")
+        self.assertTrue(any("LTV delta" in c for c in comp["changes"]))
+        self.assertTrue(any("Collateral delta" in c for c in comp["changes"]))
 
 
 if __name__ == "__main__":

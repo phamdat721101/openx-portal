@@ -10,7 +10,7 @@ describe('statement report ingestion', () => {
   beforeEach(() => { agentRegistry.clear(); gatewayDatabase.raw().exec('DELETE FROM allocation_executions; DELETE FROM statement_executions; DELETE FROM statement_reports; DELETE FROM agent_knowledge_records;'); });
   it('migrates execution evidence fields for an existing Gateway database', () => {
     const columns = new Set((gatewayDatabase.raw().prepare('PRAGMA table_info(statement_executions)').all() as { name: string }[]).map((column) => column.name));
-    expect(['ethereum_anchor_block', 'creditcoin_chain_id', 'creditcoin_block', 'creditcoin_verified_at'].every((column) => columns.has(column))).toBe(true);
+    expect(['ethereum_anchor_block', 'creditcoin_chain_id', 'creditcoin_chain_key', 'creditcoin_block', 'creditcoin_verified_at', 'creditcoin_attested_height', 'creditcoin_retry_at', 'creditcoin_proof_tx_hash', 'creditcoin_proof_tx_index', 'creditcoin_proof_payload_hash', 'creditcoin_proof_generated_at', 'creditcoin_proof_cached', 'creditcoin_verification_method'].every((column) => columns.has(column))).toBe(true);
   });
   it('accepts an authenticated report idempotently and exposes its public projection', async () => {
     const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
@@ -30,9 +30,24 @@ describe('statement report ingestion', () => {
   it('recomputes APSD-L v2.1 canonical hashes before accepting a statement', async () => {
     const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
     const canonical_envelope = { schema_version: 'apsd-l/2.1', report_id: report.report_id, position: { collateral_usd: '1000.00', debt_usd: '300.00' } };
-    const v2 = { ...report, schema_version: 'apsd-l/2.1', canonical_envelope, content_hash: statementHash(canonical_envelope), the_graph_telemetry: { status: 'complete' }, oneinch_telemetry: { status: 'unavailable' }, pnl_attribution: {}, risk_engine_audit: {}, actionable_allocation_vector: {}, decision_context_card: 'safe context' };
+    const telemetry = { provider: 'the_graph' as const, protocol: 'morpho_blue' as const, chain_id: 'eip155:42161' as const, market_id: 'market-1', observed_at: '2026-09-09T00:00:00.000Z', fetched_at: '2026-09-09T00:00:00.000Z', status: 'ok' as const, current_utilization_bps: 8100, kink_utilization_bps: 9000, kink_headroom_bps: 900, hourly_utilization_bps: [8000, 8100], utilization_volatility_bps: 50 };
+    const v2 = { ...report, schema_version: 'apsd-l/2.1', canonical_envelope, content_hash: statementHash(canonical_envelope), the_graph_telemetry: telemetry, oneinch_telemetry: { status: 'unavailable' }, pnl_attribution: {}, risk_engine_audit: { health_factor_milli: 3000, risk_level: 'CONSERVATIVE_SAFE' }, actionable_allocation_vector: { recommended_action: 'MAINTAIN' }, decision_context_card: 'safe context' };
     expect((await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(v2)).status).toBe(201);
     expect((await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send({ ...v2, report_id: '22222222-2222-4222-8222-222222222222', content_hash: 'b'.repeat(64) })).status).toBe(400);
+  });
+  it('serves only finalized public reports through the redacted CaaS endpoints', async () => {
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
+    const canonical_envelope = { schema_version: 'apsd-l/2.1', report_id: report.report_id, position: { collateral_usd: '1000.00', debt_usd: '300.00' } };
+    const v2 = { ...report, schema_version: 'apsd-l/2.1', canonical_envelope, content_hash: statementHash(canonical_envelope), the_graph_telemetry: { provider: 'the_graph', protocol: 'aave_v3', chain_id: 'eip155:42161', market_id: 'reserve-1', observed_at: '2026-09-09T00:00:00.000Z', fetched_at: new Date().toISOString(), status: 'degraded', reason: 'not_configured', hourly_utilization_bps: [7400] }, risk_engine_audit: { health_factor_milli: 2750, risk_level: 'CONSERVATIVE_SAFE' }, actionable_allocation_vector: { recommended_action: 'MAINTAIN' }, decision_context_card: 'safe public context' };
+    expect((await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(v2)).status).toBe(201);
+    const context = await request(app).get(`/v1/agents/${registration.body.agent.agent_id}/context/defi-lending`);
+    expect(context.status).toBe(200); expect(context.body.context_card).toBe('safe public context'); expect(context.body.wallet_address).toBeUndefined(); expect(context.body.telemetry_status).toBe('degraded');
+    expect((await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/context/query`).send({ task_type: 'lending_rebalance', format: 'prompt_prefix', include_proof: true })).body.system_prompt_prefix).toContain('safe public context');
+  });
+  it('does not expose private reports through CaaS', async () => {
+    const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
+    expect((await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send({ ...report, visibility: 'private' })).status).toBe(201);
+    expect((await request(app).get(`/v1/agents/${registration.body.agent.agent_id}/context/defi-lending`)).status).toBe(404);
   });
   it('keeps browser-wallet execution unavailable until the testnet registry is configured', async () => {
     const originalEnabled = process.env.OPENX_STATEMENT_EXECUTION_ENABLED;
@@ -55,10 +70,17 @@ describe('statement report ingestion', () => {
     const response = await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements/rebalance/prepare`).send({ report_id: report.report_id, wallet_address: '0x1111111111111111111111111111111111111111' });
     expect(response.status).toBe(409); expect(response.body.error).toBe('oneinch_fusion_not_configured');
   });
-  it('keeps asset allocation unavailable until every fixed-market provider binding is configured', async () => {
+  it('keeps direct USDC allocation unavailable until its fixed-market bindings are configured', async () => {
+    const originalEnabled = process.env.OPENX_ALLOCATION_ENABLED;
+    process.env.OPENX_ALLOCATION_ENABLED = 'false';
     const registration = await request(app).post('/v1/agent/register').send({ display_name: 'Research agent', host_type: 'custom' });
-    await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(report);
-    const response = await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements/${report.report_id}/allocations/prepare`).send({ wallet_address: report.wallet_address, source_amount: '1000000', slippage_bps: 50 });
-    expect(response.status).toBe(409); expect(response.body.error).toBe('allocation_execution_not_configured');
+    try {
+      await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements`).set('x-agent-key', registration.body.credential.agent_key).send(report);
+      const response = await request(app).post(`/v1/agents/${registration.body.agent.agent_id}/statements/${report.report_id}/allocations/prepare`).send({ wallet_address: report.wallet_address, usdc_collateral_amount: '1000000' });
+      expect(response.status).toBe(409); expect(response.body.error).toBe('allocation_execution_not_configured');
+    } finally {
+      if (originalEnabled === undefined) delete process.env.OPENX_ALLOCATION_ENABLED;
+      else process.env.OPENX_ALLOCATION_ENABLED = originalEnabled;
+    }
   });
 });

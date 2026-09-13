@@ -1,6 +1,6 @@
 ---
 name: statement-tracking-researcher
-description: Research allowlisted DeFi lending positions and push canonical APSD-L v2.1 reports to OpenX Gateway for portal tracking, agent learning, and 0G archival. Use for read-only position research; never execute, sign, or settle payments.
+description: Research Morpho Blue and Aave v3 Arbitrum positions through configured The Graph sources, then push canonical APSD-L v2.1 reports to OpenX Gateway. Use for read-only position research; never execute, sign, or settle payments.
 version: 1.0.0
 author: phamdat721101 (OpenX Portal)
 license: MIT
@@ -29,19 +29,18 @@ Autonomous research skill for monitoring allowlisted DeFi lending protocols (Aav
 6. **No Attestation Fabrication**:
    - Do not claim Creditcoin Attestcoin verification. Gateway and CC3 Testnet anchors handle proof verification post-submission.
 
-## Supported Protocols & Venues
+## Indexed v1 venues
 
 | Venue | Chain | Asset Pair | Oracle Anchor | Base LTV | Liq. Threshold |
 |---|---|---|---|---|---|
 | **Aave v3 (Arbitrum)** | Arbitrum One | WETH / USDC | Chainlink Composite | 80.0% | 82.5% |
 | **Morpho Blue (Arbitrum)** | Arbitrum One | wstETH / USDC | Chainlink / Redstone | 86.0% | 91.5% |
-| **Compound v3 (Arbitrum)** | Arbitrum One | ARB / USDC Comet | Chainlink Comet Anchor | 70.0% | 77.0% |
-| **Fluid (Arbitrum)** | Arbitrum One | USDC / USDT | DEX TWAP & Pyth | 90.0% | 94.0% |
+Only Morpho Blue and Aave v3 have The Graph adapters in this skill. Other allowlisted audit fixtures must emit `degraded` telemetry and are not public CaaS sources.
 
 ## Workflow Steps
 
 1. **Identity & Auth**: Read `OPENX_AGENT_ID`, `OPENX_AGENT_KEY`, and `OPENX_GATEWAY_URL` from environment or secret manager.
-2. **Market Telemetry Ingestion**: Query reserve liquidity, borrow/supply APYs, and current oracle prices for the venue.
+2. **Market Telemetry Ingestion**: Select the configured Morpho or Aave endpoint and market/reserve ID. Validate the GraphQL response, indexed observations, and hourly samples. If configuration or upstream data is unavailable, set `status: "degraded"` with a bounded reason; never label fallback data `ok`.
 3. **Position Audit**:
    - Calculate `collateral_usd` and `debt_usd`.
    - Calculate `ltv` and `health_factor`.
@@ -57,7 +56,7 @@ Autonomous research skill for monitoring allowlisted DeFi lending protocols (Aav
    - The research agent may recommend a deleverage review but never prepares, signs, approves, or broadcasts an order.
 5. **Gateway Archival & Reporting**:
    - Initialize `TaskReporter` to push ordered working-logs (`evaluating_lending_markets`, `auditing_position_ltv`, `synthesizing_canonical_statement`).
-   - Call `gateway_client.submit_statement_report(agent_id, report)` to persist in `statement_reports` table and archive in 0G.
+   - Call `gateway_client.submit_statement_report(agent_id, report)` using the existing `x-agent-key` transport to persist in `statement_reports`.
    - Call `gateway_client.submit_memory_episode(agent_id, ...)` to register cognitive insight in REM memory.
    - Call `gateway_client.submit_candidate_skill(agent_id, ...)` to register skill in Gateway catalog.
 
